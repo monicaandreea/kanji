@@ -145,9 +145,9 @@ var nextTick=require("process/browser.js").nextTick,apply=Function.prototype.app
 const { useState, useEffect, useRef } = React;
 
 const C = {
-  ink: "#1a1a2e", paper: "#f7f4ee", paperDark: "#ede9e0",
+  ink: "#2e1a3e", paper: "#f7f4ee", paperDark: "#ede9e0",
   muted: "#8a8478", line: "#d4cfc4", correct: "#2d6a4f",
-  wrong: "#c0392b", gold: "#b8860b",
+  wrong: "#c0392b", gold: "#9b7fc4",
 };
 
 const PROGRESS_KEY = "kanji-progress-v1";
@@ -649,10 +649,11 @@ function AddWordForm({ onAdd, onClose }) {
 }
 
 // ── Account screen — full page for sync ID management ────────────────────
-function AccountScreen({ onClose, onReset, onClearWords }) {
+function AccountScreen({ onClose, onReset, onClearWords, sessionSize, onSessionSize, masteryTarget, onMasteryTarget }) {
   const [userId, setUserIdState] = React.useState(getUserId());
   const [input, setInput] = React.useState('');
   const [copied, setCopied] = React.useState(false);
+  const [sizeInput, setSizeInput] = React.useState(String(sessionSize || 10));
 
   const copy = () => {
     navigator.clipboard.writeText(userId).then(() => {
@@ -684,6 +685,50 @@ function AccountScreen({ onClose, onReset, onClearWords }) {
     React.createElement('button', { onClick: copy,
       style: { ...btn(C.ink, 'white'), flex: 'unset', width: '100%', marginBottom: 28 }
     }, copied ? '✓ Copied to clipboard' : 'Copy my Sync ID'),
+
+    React.createElement('div', { style: { height: 1, background: C.line, marginBottom: 24 } }),
+
+    React.createElement('div', { style: { fontSize: 14, color: C.ink, fontWeight: 600, marginBottom: 8 } }, 'Words per session'),
+    React.createElement('div', { style: { color: C.muted, fontSize: 13, marginBottom: 12, lineHeight: 1.6 } },
+      'How many active words to practice at once. When you master one, a new word takes its place.'),
+    React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 10 } },
+      [10, 15, 20, 30].map(n =>
+        React.createElement('button', { key: n,
+          onClick: () => { setSizeInput(String(n)); onSessionSize(n); },
+          style: { flex: 1, padding: '10px', borderRadius: 8,
+            border: `2px solid ${sessionSize === n ? C.ink : C.line}`,
+            background: sessionSize === n ? C.ink : 'white',
+            color: sessionSize === n ? 'white' : C.ink,
+            fontWeight: 600, cursor: 'pointer', fontSize: 14 } }, n)
+      )
+    ),
+    React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 28 } },
+      React.createElement('input', { type: 'number', value: sizeInput, min: 1, max: 200,
+        onChange: e => setSizeInput(e.target.value),
+        placeholder: 'Custom…',
+        style: { flex: 1, padding: '10px 14px', borderRadius: 8, border: `1px solid ${C.line}`,
+          fontSize: 14, outline: 'none', boxSizing: 'border-box' } }),
+      React.createElement('button', {
+        onClick: () => { const n = parseInt(sizeInput, 10); if (Number.isFinite(n) && n > 0) onSessionSize(n); },
+        style: { ...btn(C.ink, 'white'), flex: 'unset', padding: '10px 18px' } }, 'Set')
+    ),
+
+    React.createElement('div', { style: { height: 1, background: C.line, marginBottom: 24 } }),
+
+    React.createElement('div', { style: { fontSize: 14, color: C.ink, fontWeight: 600, marginBottom: 8 } }, 'Correct answers to master'),
+    React.createElement('div', { style: { color: C.muted, fontSize: 13, marginBottom: 12, lineHeight: 1.6 } },
+      'How many times in a row you need to answer a word correctly before it counts as mastered.'),
+    React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 28 } },
+      [3, 5, 7, 10].map(n =>
+        React.createElement('button', { key: n,
+          onClick: () => onMasteryTarget(n),
+          style: { flex: 1, padding: '10px', borderRadius: 8,
+            border: `2px solid ${masteryTarget === n ? C.ink : C.line}`,
+            background: masteryTarget === n ? C.ink : 'white',
+            color: masteryTarget === n ? 'white' : C.ink,
+            fontWeight: 600, cursor: 'pointer', fontSize: 14 } }, n)
+      )
+    ),
 
     React.createElement('div', { style: { height: 1, background: C.line, marginBottom: 24 } }),
 
@@ -756,8 +801,7 @@ function AddListForm({ onMerge, onClose }) {
       React.createElement('button', { onClick: () => inputRef.current && inputRef.current.click(), disabled: loading,
         style: { width: '100%', padding: '16px', borderRadius: 12, border: `2px dashed ${C.line}`,
           background: 'white', cursor: 'pointer', marginBottom: 14, boxSizing: 'border-box' }},
-        React.createElement('div', { style: { fontSize: 24, marginBottom: 4 } }, '📂'),
-        React.createElement('div', { style: { fontSize: 15, fontWeight: 700, color: C.ink } }, loading ? 'Loading…' : 'Choose file')
+                React.createElement('div', { style: { fontSize: 15, fontWeight: 700, color: C.ink } }, loading ? 'Loading…' : 'Choose file')
       ),
       React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 } },
         React.createElement('div', { style: { flex: 1, height: 1, background: C.line } }),
@@ -777,12 +821,12 @@ function AddListForm({ onMerge, onClose }) {
   );
 }
 
-function WordsMode({ items, progress, onRemove, onAdd, onMerge, onResetWord }) {
+function WordsMode({ items, progress, onRemove, onAdd, onMerge, onResetWord, activeIds, onAddToActive, onRemoveFromActive, masteryTarget }) {
   const [showAdd, setShowAdd] = useState(false);
   const [showAddList, setShowAddList] = useState(false);
   const [search, setSearch] = useState('');
   const studied = items.filter(it=>(progress[it.id]?.correct||0)+(progress[it.id]?.wrong||0)>0).length;
-  const mastered = items.filter(it=>(progress[it.id]?.streak||0)>=5).length;
+  const mastered = items.filter(it=>(progress[it.id]?.streak||0)>=masteryTarget).length;
 
   const q = search.trim().toLowerCase();
   const filtered = items.filter(it => {
@@ -832,38 +876,48 @@ function WordsMode({ items, progress, onRemove, onAdd, onMerge, onResetWord }) {
           const total=p.correct+p.wrong;
           const pct=total>0?Math.round((p.correct/total)*100):null;
           const streak=p.streak||0;
-          const isMastered=streak>=5;
+          const isMastered=streak>=masteryTarget;
+          const inActive=activeIds.includes(item.id);
           return React.createElement('div', { key:item.id,
-            style:{ display:'flex', alignItems:'center', gap:10,
+            style:{ display:'flex', alignItems:'center', gap:8,
               background: isMastered ? '#f0f7f2' : 'white',
               borderRadius:8, padding:'10px 12px',
-              border:`1px solid ${isMastered ? C.correct : C.line}` }},
+              border:`1px solid ${inActive ? C.gold : (isMastered ? C.correct : C.line)}` }},
             React.createElement('div', { style:{ fontSize:24, fontWeight:700, color:C.ink, minWidth:44 } }, item.word),
             React.createElement('div', { style:{ flex:1, minWidth:0 } },
               React.createElement('div', { style:{ fontSize:12, color:C.muted } },
                 React.createElement(KanaReading, { word:item.word, fallback:item.reading })),
               React.createElement('div', { style:{ fontSize:13, color:C.ink, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' } }, item.meanings[0])
             ),
-            React.createElement('div', { style:{ textAlign:'right', fontSize:12, minWidth:54 } },
+            React.createElement('div', { style:{ textAlign:'right', fontSize:12, minWidth:50 } },
               isMastered
-                ? React.createElement('div', { style:{ color:C.correct, fontWeight:700 } }, '★ done')
+                ? React.createElement('div', { style:{ color:C.correct, fontWeight:700 } }, 'done')
                 : total===0
                   ? React.createElement('span', { style:{ color:C.muted } }, 'unseen')
                   : React.createElement(React.Fragment, null,
-                      React.createElement('div', { style:{ color:streak>0?C.correct:C.muted, fontWeight:700 } }, `🔥 ${streak}/5`),
+                      React.createElement('div', { style:{ color:streak>0?C.correct:C.muted, fontWeight:700 } }, `${streak}/${masteryTarget}`),
                       React.createElement('div', { style:{ color:C.muted } }, `${pct}%`)
                     )
             ),
+            // Active-deck toggle
+            React.createElement('button', {
+              onClick:()=> inActive ? onRemoveFromActive(item.id) : onAddToActive(item.id),
+              title: inActive ? 'In active set — tap to remove' : 'Add to active set',
+              style:{ background: inActive ? C.gold : 'none', border:`1px solid ${inActive ? C.gold : C.line}`,
+                color: inActive ? 'white' : C.muted, cursor:'pointer', fontSize:14,
+                width:26, height:26, borderRadius:6, flexShrink:0, lineHeight:1,
+                display:'flex', alignItems:'center', justifyContent:'center', padding:0 }
+            }, inActive ? '✓' : '+'),
             React.createElement('button', {
               onClick:()=>{ if(total>0 && confirm(`Reset progress for "${item.word}"?`)) onResetWord(item.id); },
               title:'Reset progress for this word',
-              style:{ background:'none', border:'none', color:total>0?C.gold:C.line, cursor:total>0?'pointer':'default', fontSize:15, padding:'4px 4px', flexShrink:0 }
-            }, '↺'),
+              style:{ background:'none', border:'none', color:total>0?C.gold:C.line, cursor:total>0?'pointer':'default', fontSize:11, padding:'4px 4px', flexShrink:0 }
+            }, 'reset'),
             React.createElement('button', {
               onClick:()=>{ if(confirm(`Remove "${item.word}"?`)) onRemove(item.id); },
               title:'Remove word',
-              style:{ background:'none', border:'none', color:C.muted, cursor:'pointer', fontSize:15, padding:'4px 4px', flexShrink:0 }
-            }, '✕')
+              style:{ background:'none', border:'none', color:C.muted, cursor:'pointer', fontSize:11, padding:'4px 4px', flexShrink:0 }
+            }, 'remove')
           );
         })}
       </div>
@@ -906,7 +960,6 @@ function ImportScreen({ onImport, onAccount }) {
       <button onClick={()=>inputRef.current&&inputRef.current.click()} disabled={loading}
         style={{ width:'100%', padding:'18px', borderRadius:12, border:`2px dashed ${C.line}`,
           background:'white', cursor:'pointer', marginBottom:16 }}>
-        <div style={{ fontSize:26, marginBottom:4 }}>📂</div>
         <div style={{ fontSize:15, fontWeight:700, color:C.ink }}>{loading?'Loading…':'Choose file'}</div>
         <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>Works on desktop · may not work on mobile Chrome</div>
       </button>
@@ -934,10 +987,23 @@ function ImportScreen({ onImport, onAccount }) {
       </div>
       <button onClick={onAccount}
         style={{ ...btn('white',C.ink), border:`1px solid ${C.line}`, flex:'unset', width:'100%', marginTop:16 }}>
-        ⚙ Already have an account? Log in with Sync ID
+        Already have an account? Log in with Sync ID
       </button>
     </div>
   );
+}
+
+const SESSION_KEY = "kanji-session-size";
+const DECK_KEY = "kanji-active-deck-v1";
+const MASTERY_KEY = "kanji-mastery-target";
+
+function shuffle(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
 }
 
 function App() {
@@ -946,20 +1012,92 @@ function App() {
   const [mode, setMode] = useState('write');
   const [ready, setReady] = useState(false);
   const [showAccount, setShowAccount] = useState(false);
+  const [sessionSize, setSessionSizeState] = useState(() => {
+    const v = parseInt(localStorage.getItem(SESSION_KEY), 10);
+    return Number.isFinite(v) && v > 0 ? v : 10;
+  });
+  const [masteryTarget, setMasteryTargetState] = useState(() => {
+    const v = parseInt(localStorage.getItem(MASTERY_KEY), 10);
+    return Number.isFinite(v) && v > 0 ? v : 5;
+  });
+  const setMasteryTarget = (n) => {
+    const v = Math.max(1, Math.min(n, 20));
+    setMasteryTargetState(v);
+    localStorage.setItem(MASTERY_KEY, String(v));
+  };
+  // Active deck: ordered list of word IDs for this session (sticky, persisted)
+  const [activeIds, setActiveIds] = useState(null);
+  const [deckLoaded, setDeckLoaded] = useState(false);
 
   useEffect(() => {
     (async () => {
-      const [savedProgress, savedWords] = await Promise.all([
+      const [savedProgress, savedWords, savedDeck] = await Promise.all([
         storageGet(PROGRESS_KEY),
         storageGet(WORDS_KEY),
+        storageGet(DECK_KEY),
       ]);
       if (savedProgress) setProgress(savedProgress);
       if (savedWords) setItems(savedWords);
+      if (Array.isArray(savedDeck)) setActiveIds(savedDeck);
+      setDeckLoaded(true);
       setReady(true);
     })();
   }, []);
 
-  const handleImport = parsed => { setItems(parsed); storageSet(WORDS_KEY, parsed); };
+  const persistDeck = (deck) => { storageSet(DECK_KEY, deck); };
+
+  // Build/refill the active deck. Sticky: keeps existing active words,
+  // drops mastered ones, and tops up to sessionSize from unmastered words.
+  useEffect(() => {
+    if (!items || !deckLoaded) return;
+    const isMastered = id => (progress[id]?.streak || 0) >= masteryTarget;
+    const validIds = new Set(items.map(it => it.id));
+
+    setActiveIds(prev => {
+      // Start from existing deck (if any), keep only valid + unmastered words
+      let deck = (prev || []).filter(id => validIds.has(id) && !isMastered(id));
+      // Top up with new unmastered words not already in the deck
+      if (deck.length < sessionSize) {
+        const inDeck = new Set(deck);
+        const candidates = items.filter(it => !inDeck.has(it.id) && !isMastered(it.id));
+        const fill = shuffle(candidates).slice(0, sessionSize - deck.length).map(it => it.id);
+        deck = [...deck, ...fill];
+      }
+      // If everything is mastered and deck is empty, fall back to reviewing all
+      if (deck.length === 0 && items.length > 0) {
+        deck = shuffle(items).slice(0, sessionSize).map(it => it.id);
+      }
+      persistDeck(deck);
+      return deck;
+    });
+  }, [items, deckLoaded, sessionSize]);
+
+  const setSessionSize = (n) => {
+    const v = Math.max(1, Math.min(n, 200));
+    setSessionSizeState(v);
+    localStorage.setItem(SESSION_KEY, String(v));
+    // Rebuild deck fresh at the new size
+    if (items) {
+      const isMastered = id => (progress[id]?.streak || 0) >= masteryTarget;
+      const unmastered = items.filter(it => !isMastered(it.id));
+      const pool = unmastered.length > 0 ? unmastered : items;
+      const deck = shuffle(pool).slice(0, v).map(it => it.id);
+      setActiveIds(deck);
+      persistDeck(deck);
+    }
+  };
+
+  const reshuffle = () => {
+    if (!items) return;
+    const isMastered = id => (progress[id]?.streak || 0) >= masteryTarget;
+    const unmastered = items.filter(it => !isMastered(it.id));
+    const pool = unmastered.length > 0 ? unmastered : items;
+    const deck = shuffle(pool).slice(0, sessionSize).map(it => it.id);
+    setActiveIds(deck);
+    persistDeck(deck);
+  };
+
+  const handleImport = parsed => { setItems(parsed); storageSet(WORDS_KEY, parsed); setActiveIds(null); storageSet(DECK_KEY, null); };
   const handleMerge = parsed => {
     let added = 0;
     setItems(prev => {
@@ -977,24 +1115,60 @@ function App() {
   const handleAnswer = (id, correct) => {
     setProgress(prev => {
       const e = prev[id]||{correct:0,wrong:0,streak:0};
+      const newStreak = correct ? (e.streak||0)+1 : 0;
       const next = { ...prev, [id]:{
         correct: e.correct+(correct?1:0),
         wrong: e.wrong+(correct?0:1),
-        streak: correct ? (e.streak||0)+1 : 0,
+        streak: newStreak,
       } };
       storageSet(PROGRESS_KEY, next);
+
+      // If this word just got mastered, swap in a fresh unmastered word
+      if (newStreak >= masteryTarget && items) {
+        setActiveIds(prevDeck => {
+          if (!prevDeck) return prevDeck;
+          const inDeck = new Set(prevDeck);
+          const candidate = shuffle(items.filter(it =>
+            !inDeck.has(it.id) && (next[it.id]?.streak || 0) < masteryTarget
+          ))[0];
+          // Drop the mastered word; append the new one if there is one
+          const updated = candidate
+            ? [...prevDeck.filter(x => x !== id), candidate.id]
+            : prevDeck.filter(x => x !== id);
+          persistDeck(updated);
+          return updated;
+        });
+      }
       return next;
     });
   };
   const handleRemove = id => {
     setItems(prev => { const next=prev.filter(it=>it.id!==id); storageSet(WORDS_KEY,next); return next; });
+    setActiveIds(prev => { if (!prev) return prev; const next = prev.filter(x => x !== id); persistDeck(next); return next; });
   };
   const handleAdd = word => {
     setItems(prev => { const next=[...prev,word]; storageSet(WORDS_KEY,next); return next; });
   };
+  const addToActive = id => {
+    setActiveIds(prev => {
+      const cur = prev || [];
+      if (cur.includes(id)) return cur;
+      const next = [...cur, id];
+      persistDeck(next);
+      return next;
+    });
+  };
+  const removeFromActive = id => {
+    setActiveIds(prev => {
+      if (!prev) return prev;
+      const next = prev.filter(x => x !== id);
+      persistDeck(next);
+      return next;
+    });
+  };
   const resetProgress = () => {
     if (!confirm('Reset all your progress?')) return;
-    setProgress({}); storageSet(PROGRESS_KEY, {});
+    setProgress({}); storageSet(PROGRESS_KEY, {}); setActiveIds(null); storageSet(DECK_KEY, null);
   };
   const resetWord = (id) => {
     setProgress(prev => {
@@ -1006,7 +1180,7 @@ function App() {
   };
   const clearWords = () => {
     if (!confirm('Load a new word list? This won\'t delete your progress.')) return;
-    setItems(null); storageSet(WORDS_KEY, null);
+    setItems(null); storageSet(WORDS_KEY, null); setActiveIds(null); storageSet(DECK_KEY, null);
   };
 
   if (!ready) return React.createElement('div', {
@@ -1015,36 +1189,56 @@ function App() {
 
   if (showAccount) return React.createElement('div', {
     style:{ minHeight:'100vh', background:C.paper, paddingTop:20 }},
-    React.createElement(AccountScreen, { onClose:()=>setShowAccount(false), onReset:resetProgress, onClearWords:clearWords }));
+    React.createElement(AccountScreen, { onClose:()=>setShowAccount(false), onReset:resetProgress,
+      onClearWords:clearWords, sessionSize, onSessionSize:setSessionSize,
+      masteryTarget, onMasteryTarget:setMasteryTarget }));
 
   if (!items) return React.createElement('div', {
     style:{ minHeight:'100vh', background:C.paper, display:'flex', alignItems:'center' }},
     React.createElement(ImportScreen, { onImport:handleImport, onAccount:()=>setShowAccount(true) }));
 
-  const sorted = [...items].sort((a,b)=>{
-    const pa=progress[a.id]||{correct:0,wrong:0,streak:0}, pb=progress[b.id]||{correct:0,wrong:0,streak:0};
-    // Lower streak first (words closer to mastery get practiced more)
-    return (pa.streak||0)-(pb.streak||0);
-  });
+  // Active deck: the words for this session, in shuffled order
+  const idToItem = {};
+  items.forEach(it => { idToItem[it.id] = it; });
+  const deck = (activeIds || []).map(id => idToItem[id]).filter(Boolean);
+  const deckEmpty = deck.length === 0;
+
+  const masteredCount = items.filter(it => (progress[it.id]?.streak||0) >= masteryTarget).length;
+  const allMastered = masteredCount === items.length && items.length > 0;
 
   return React.createElement('div', { style:{ minHeight:'100vh', background:C.paper } },
     React.createElement('div', { style:{ background:C.ink, color:'white', padding:'12px 16px',
       display:'flex', alignItems:'center', justifyContent:'space-between' }},
       React.createElement('div', { style:{ fontSize:18, fontWeight:700 } }, '漢字 ',
-        React.createElement('span', { style:{ fontSize:12, opacity:0.6, fontWeight:400 } }, items.length+' words')),
+        React.createElement('span', { style:{ fontSize:12, opacity:0.6, fontWeight:400 } },
+          `${deck.length} active · ${items.length} total`)),
       React.createElement('div', { style:{ display:'flex', gap:2 } },
-        [['write','✏️','Write'],['quiz','🎯','Quiz'],['words','📖','Words'],['account','⚙','']].map(([m,icon,label])=>
+        [['write','Write'],['quiz','Quiz'],['words','Words'],['account','⚙']].map(([m,label])=>
           React.createElement('button', { key:m, onClick:()=> m==='account' ? setShowAccount(true) : setMode(m), style:{
             padding:'6px 10px', borderRadius:6, border:'none',
             background:mode===m?'rgba(255,255,255,0.2)':'transparent',
-            color:'white', fontSize:13, cursor:'pointer' }}, label ? icon+' '+label : icon)
+            color:'white', fontSize:13, cursor:'pointer' }}, label)
         )
       )
     ),
     React.createElement('div', { style:{ maxWidth:420, margin:'0 auto', padding:20 } },
-      mode==='write' && React.createElement(WriteMode, { items:sorted, progress, onAnswer:handleAnswer, onRemove:handleRemove }),
-      mode==='quiz' && React.createElement(QuizMode, { key:items.length, items:sorted, progress, onAnswer:handleAnswer, onRemove:handleRemove }),
-      mode==='words' && React.createElement(WordsMode, { items, progress, onRemove:handleRemove, onAdd:handleAdd, onMerge:handleMerge, onResetWord:resetWord })
+      // Session controls bar (only on practice tabs)
+      (mode==='write' || mode==='quiz') && React.createElement('div', {
+        style:{ display:'flex', alignItems:'center', justifyContent:'space-between',
+          marginBottom:16, fontSize:12, color:C.muted }},
+        React.createElement('span', null,
+          allMastered ? 'All words mastered! Reviewing all.' : `${masteredCount} of ${items.length} mastered`),
+        React.createElement('button', { onClick:()=>{ if(confirm('Shuffle in a new set of words? Your current active set will be replaced (progress is kept).')) reshuffle(); },
+          style:{ background:'white', border:`1px solid ${C.line}`, borderRadius:6,
+            padding:'5px 10px', fontSize:12, cursor:'pointer', color:C.ink } }, 'New set')
+      ),
+      mode==='write' && (deckEmpty
+        ? React.createElement('div', { style:{ textAlign:'center', color:C.muted, padding:'40px 20px' } }, 'No active words. Add some in the Words tab.')
+        : React.createElement(WriteMode, { key:deck.length, items:deck, progress, onAnswer:handleAnswer, onRemove:handleRemove })),
+      mode==='quiz' && (deckEmpty
+        ? React.createElement('div', { style:{ textAlign:'center', color:C.muted, padding:'40px 20px' } }, 'No active words. Add some in the Words tab.')
+        : React.createElement(QuizMode, { key:deck.length, items:deck, progress, onAnswer:handleAnswer, onRemove:handleRemove })),
+      mode==='words' && React.createElement(WordsMode, { items, progress, onRemove:handleRemove, onAdd:handleAdd, onMerge:handleMerge, onResetWord:resetWord, activeIds:activeIds||[], onAddToActive:addToActive, onRemoveFromActive:removeFromActive, masteryTarget })
     )
   );
 }
