@@ -17,6 +17,15 @@
 </style>
 </head>
 <body>
+<script>
+  // Apply saved theme to body background immediately to avoid a flash
+  (function(){
+    try {
+      var dark = localStorage.getItem('kanji-theme') === 'dark';
+      document.body.style.background = dark ? '#1a1320' : '#f7f4ee';
+    } catch(e){}
+  })();
+</script>
 <div id="root"></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
@@ -144,11 +153,31 @@ var nextTick=require("process/browser.js").nextTick,apply=Function.prototype.app
 <script type="text/babel">
 const { useState, useEffect, useRef } = React;
 
-const C = {
+const LIGHT = {
   ink: "#2e1a3e", paper: "#f7f4ee", paperDark: "#ede9e0",
   muted: "#8a8478", line: "#d4cfc4", correct: "#2d6a4f",
-  wrong: "#c0392b", gold: "#9b7fc4",
+  wrong: "#c0392b", gold: "#9b7fc4", card: "#ffffff",
+  softGreen: "#f0f7f2", softGreenBright: "#e8f5e9", softRed: "#fdecea",
 };
+const DARK = {
+  ink: "#e8def5", paper: "#1a1320", paperDark: "#241a2e",
+  muted: "#9a8fa8", line: "#3a2f47", correct: "#52b788",
+  wrong: "#e57373", gold: "#b89ad8", card: "#241a2e",
+  softGreen: "#1e2e24", softGreenBright: "#1e3a2a", softRed: "#3a2020",
+};
+const THEME_KEY = "kanji-theme";
+function loadTheme() {
+  const t = localStorage.getItem(THEME_KEY);
+  return t === "dark" ? "dark" : "light";
+}
+// C is a live object; its properties are swapped when the theme changes.
+const C = { ...(loadTheme() === "dark" ? DARK : LIGHT) };
+function applyTheme(name) {
+  const src = name === "dark" ? DARK : LIGHT;
+  Object.keys(src).forEach(k => { C[k] = src[k]; });
+  localStorage.setItem(THEME_KEY, name);
+  document.body.style.background = C.paper;
+}
 
 const PROGRESS_KEY = "kanji-progress-v1";
 const WORDS_KEY = "kanji-words-v1";
@@ -378,7 +407,7 @@ function StrokeOrder({ word }) {
       const url = `https://raw.githubusercontent.com/KanjiVG/kanjivg/master/kanji/${cp}.svg`;
       return React.createElement('img', {
         key: i, src: url, width: 80, height: 80, alt: char,
-        style: { border: `1px solid ${C.line}`, borderRadius: 6, background: 'white', display: 'block' },
+        style: { border: `1px solid ${C.line}`, borderRadius: 6, background: '#ffffff', display: 'block' },
         onError: e => { e.target.style.display = 'none'; }
       });
     })
@@ -464,7 +493,7 @@ function KanjiPopup({ char, onClose, items }) {
           `Words with ${char} (${words.length})`),
         React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
           words.map(w => React.createElement('div', { key: w.id,
-            style: { display: 'flex', alignItems: 'center', gap: 10, background: 'white',
+            style: { display: 'flex', alignItems: 'center', gap: 10, background: C.card,
               borderRadius: 8, padding: '8px 12px', border: `1px solid ${C.line}` }},
             React.createElement('div', { style: { fontSize: 20, fontWeight: 700, color: C.ink, minWidth: 40 } }, w.word),
             React.createElement('div', { style: { flex: 1, minWidth: 0 } },
@@ -540,7 +569,7 @@ function DrawCanvas({ clearTrigger }) {
 
   return React.createElement('canvas', {
     ref: canvasRef, width: 280, height: 280,
-    style: { border: `2px solid ${C.line}`, borderRadius: 8, background: 'white',
+    style: { border: `2px solid ${C.line}`, borderRadius: 8, background: C.card,
       cursor: 'crosshair', touchAction: 'none', width: '100%', maxWidth: 280 },
     onMouseDown: startDraw, onMouseMove: draw, onMouseUp: stopDraw, onMouseLeave: stopDraw,
     onTouchStart: startDraw, onTouchMove: draw, onTouchEnd: stopDraw,
@@ -604,7 +633,7 @@ function WriteMode({ items, progress, onAnswer, onCurrentWord, onTapKanji }) {
         </div>
       ) : (
         <div style={{ display:'flex', flexDirection:'column', gap:10, width:'100%' }}>
-          <button onClick={practice} style={{ ...btn('white',C.ink), border:`1px solid ${C.line}` }}>Practice (clear & rewrite)</button>
+          <button onClick={practice} style={{ ...btn(C.card,C.ink), border:`1px solid ${C.line}` }}>Practice (clear & rewrite)</button>
           <div style={{ display:'flex', gap:10, width:'100%' }}>
             <button onClick={() => grade(false)} style={btn(C.wrong,'white')}>✗ Wrong</button>
             <button onClick={() => grade(true)} style={btn(C.correct,'white')}>✓ Correct</button>
@@ -670,10 +699,10 @@ function QuizMode({ items, progress, onAnswer, onCurrentWord, onTapKanji }) {
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
         {choices.map(choice => {
           const isCorrect = choice === correct, isPicked = choice === picked;
-          let bg='white', border=C.line, color=C.ink;
+          let bg=C.card, border=C.line, color=C.ink;
           if (revealed) {
-            if (isCorrect) { bg='#e8f5e9'; border=C.correct; color=C.correct; }
-            else if (isPicked) { bg='#fdecea'; border=C.wrong; color=C.wrong; }
+            if (isCorrect) { bg=C.softGreenBright; border=C.correct; color=C.correct; }
+            else if (isPicked) { bg=C.softRed; border=C.wrong; color=C.wrong; }
           }
           return React.createElement('button', {
             key: choice,
@@ -706,7 +735,7 @@ function FormField({ label, value, setter, placeholder, hint, clearError }) {
     React.createElement('div', { style:{ fontSize:12, fontWeight:600, color:C.ink, marginBottom:4 } }, label),
     React.createElement('input', { value, onChange:e=>{ setter(e.target.value); clearError && clearError(); },
       placeholder, style:{ width:'100%', padding:'10px 12px', borderRadius:8,
-        border:`1px solid ${C.line}`, fontSize:16, outline:'none', background:'white', boxSizing:'border-box' } }),
+        border:`1px solid ${C.line}`, fontSize:16, outline:'none', background:C.card, boxSizing:'border-box' } }),
     hint && React.createElement('div', { style:{ fontSize:11, color:C.muted, marginTop:3 } }, hint)
   );
 }
@@ -756,7 +785,7 @@ function AddWordForm({ onAdd, onClose, editItem }) {
 }
 
 // ── Account screen — full page for sync ID management ────────────────────
-function AccountScreen({ onClose, onReset, onClearWords, sessionSize, onSessionSize, masteryTarget, onMasteryTarget }) {
+function AccountScreen({ onClose, onReset, onClearWords, sessionSize, onSessionSize, masteryTarget, onMasteryTarget, theme, onToggleTheme }) {
   const [userId, setUserIdState] = React.useState(getUserId());
   const [input, setInput] = React.useState('');
   const [copied, setCopied] = React.useState(false);
@@ -782,6 +811,27 @@ function AccountScreen({ onClose, onReset, onClearWords, sessionSize, onSessionS
         style: { background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: C.muted } }, '✕')
     ),
 
+    // Appearance / dark-mode toggle
+    React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+      background: C.card, border: `1px solid ${C.line}`, borderRadius: 10, padding: '14px 16px', marginBottom: 28 } },
+      React.createElement('div', null,
+        React.createElement('div', { style: { fontSize: 14, fontWeight: 600, color: C.ink } }, 'Dark mode'),
+        React.createElement('div', { style: { fontSize: 12, color: C.muted, marginTop: 2 } }, theme === 'dark' ? 'On' : 'Off')
+      ),
+      React.createElement('button', {
+        onClick: onToggleTheme,
+        role: 'switch', 'aria-checked': theme === 'dark',
+        style: { position: 'relative', width: 52, height: 30, borderRadius: 999, border: 'none',
+          background: theme === 'dark' ? C.gold : C.line, cursor: 'pointer', transition: 'background 0.2s', padding: 0, flexShrink: 0 }
+      },
+        React.createElement('span', {
+          style: { position: 'absolute', top: 3, left: theme === 'dark' ? 25 : 3, width: 24, height: 24,
+            borderRadius: '50%', background: '#fff', transition: 'left 0.2s',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.3)' }
+        })
+      )
+    ),
+
     React.createElement('div', { style: { fontSize: 14, color: C.ink, fontWeight: 600, marginBottom: 8 } }, 'Your Sync ID'),
     React.createElement('div', { style: { color: C.muted, fontSize: 13, marginBottom: 12, lineHeight: 1.6 } },
       'This ID is your account. Copy it and paste it on your other devices to share the same words and progress.'),
@@ -804,7 +854,7 @@ function AccountScreen({ onClose, onReset, onClearWords, sessionSize, onSessionS
           onClick: () => { setSizeInput(String(n)); onSessionSize(n); },
           style: { flex: 1, padding: '10px', borderRadius: 8,
             border: `2px solid ${sessionSize === n ? C.ink : C.line}`,
-            background: sessionSize === n ? C.ink : 'white',
+            background: sessionSize === n ? C.ink : C.card,
             color: sessionSize === n ? 'white' : C.ink,
             fontWeight: 600, cursor: 'pointer', fontSize: 14 } }, n)
       )
@@ -831,7 +881,7 @@ function AccountScreen({ onClose, onReset, onClearWords, sessionSize, onSessionS
           onClick: () => onMasteryTarget(n),
           style: { flex: 1, padding: '10px', borderRadius: 8,
             border: `2px solid ${masteryTarget === n ? C.ink : C.line}`,
-            background: masteryTarget === n ? C.ink : 'white',
+            background: masteryTarget === n ? C.ink : C.card,
             color: masteryTarget === n ? 'white' : C.ink,
             fontWeight: 600, cursor: 'pointer', fontSize: 14 } }, n)
       )
@@ -856,10 +906,10 @@ function AccountScreen({ onClose, onReset, onClearWords, sessionSize, onSessionS
       React.createElement('div', { style: { height: 1, background: C.line, marginBottom: 24 } }),
       React.createElement('div', { style: { fontSize: 14, color: C.ink, fontWeight: 600, marginBottom: 12 } }, 'Danger zone'),
       React.createElement('button', { onClick: onReset,
-        style: { ...btn('white', C.wrong), border: `1px solid ${C.wrong}`, flex: 'unset', width: '100%', marginBottom: 10 }
+        style: { ...btn(C.card, C.wrong), border: `1px solid ${C.wrong}`, flex: 'unset', width: '100%', marginBottom: 10 }
       }, 'Reset all progress'),
       React.createElement('button', { onClick: onClearWords,
-        style: { ...btn('white', C.muted), border: `1px solid ${C.line}`, flex: 'unset', width: '100%' }
+        style: { ...btn(C.card, C.muted), border: `1px solid ${C.line}`, flex: 'unset', width: '100%' }
       }, 'Load a different word list')
     )
   );
@@ -907,7 +957,7 @@ function AddListForm({ onMerge, onClose }) {
       React.createElement('input', { ref: inputRef, type: 'file', accept: '.json,.csv,.txt', onChange: onFileChange, style: { display: 'none' } }),
       React.createElement('button', { onClick: () => inputRef.current && inputRef.current.click(), disabled: loading,
         style: { width: '100%', padding: '16px', borderRadius: 12, border: `2px dashed ${C.line}`,
-          background: 'white', cursor: 'pointer', marginBottom: 14, boxSizing: 'border-box' }},
+          background: C.card, cursor: 'pointer', marginBottom: 14, boxSizing: 'border-box' }},
                 React.createElement('div', { style: { fontSize: 15, fontWeight: 700, color: C.ink } }, loading ? 'Loading…' : 'Choose file')
       ),
       React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 } },
@@ -953,7 +1003,7 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
       <div style={{ display:'flex', gap:10 }}>
         {[['Total',items.length,C.ink],['Studied',studied,C.gold],['Mastered',mastered,C.correct]].map(([l,v,c])=>
           React.createElement('div', { key:l, style:{ flex:1, textAlign:'center', padding:'12px 8px',
-            background:'white', borderRadius:8, border:`1px solid ${C.line}` }},
+            background:C.card, borderRadius:8, border:`1px solid ${C.line}` }},
             React.createElement('div', { style:{ fontSize:24, fontWeight:700, color:c } }, v),
             React.createElement('div', { style:{ fontSize:11, color:C.muted } }, l)
           )
@@ -961,7 +1011,7 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
       </div>
       <div style={{ display:'flex', gap:10 }}>
         <button onClick={()=>setShowAdd(true)} style={{ ...btn(C.ink,'white') }}>+ Add word</button>
-        <button onClick={()=>setShowAddList(true)} style={{ ...btn('white',C.ink), border:`2px solid ${C.ink}` }}>+ Add list</button>
+        <button onClick={()=>setShowAddList(true)} style={{ ...btn(C.card,C.ink), border:`2px solid ${C.ink}` }}>+ Add list</button>
       </div>
 
       {/* Search bar */}
@@ -969,7 +1019,7 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
         <input value={search} onChange={e=>setSearch(e.target.value)}
           placeholder="Search words, readings, meanings…"
           style={{ width:'100%', padding:'11px 36px 11px 14px', borderRadius:8,
-            border:`1px solid ${C.line}`, fontSize:14, outline:'none', boxSizing:'border-box', background:'white' }} />
+            border:`1px solid ${C.line}`, fontSize:14, outline:'none', boxSizing:'border-box', background:C.card }} />
         {search && React.createElement('button', { onClick:()=>setSearch(''),
           style:{ position:'absolute', right:8, top:'50%', transform:'translateY(-50%)',
             background:'none', border:'none', color:C.muted, cursor:'pointer', fontSize:16 } }, '✕')}
@@ -978,7 +1028,7 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
       {/* Sort toggle */}
       <div style={{ display:'flex', alignItems:'center', justifyContent:'flex-end', gap:8, marginTop:-6 }}>
         <button onClick={()=>setActiveFirst(v=>!v)}
-          style={{ background: activeFirst ? C.gold : 'white', color: activeFirst ? 'white' : C.muted,
+          style={{ background: activeFirst ? C.gold : C.card, color: activeFirst ? 'white' : C.muted,
             border:`1px solid ${activeFirst ? C.gold : C.line}`, borderRadius:6,
             padding:'5px 10px', fontSize:12, cursor:'pointer' }}>
           {activeFirst ? '✓ Active set first' : 'Active set first'}
@@ -1004,7 +1054,7 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
           const inActive=activeIds.includes(item.id);
           return React.createElement('div', { key:item.id,
             style:{ display:'flex', alignItems:'center', gap:8,
-              background: isMastered ? '#f0f7f2' : 'white',
+              background: isMastered ? C.softGreen : C.card,
               borderRadius:8, padding:'10px 12px',
               border:`1px solid ${inActive ? C.gold : (isMastered ? C.correct : C.line)}` }},
             React.createElement('div', { style:{ flex:1, minWidth:0 } },
@@ -1089,7 +1139,7 @@ function ImportScreen({ onImport, onAccount }) {
       <input ref={inputRef} type="file" accept=".json,.csv,.txt" onChange={onFileChange} style={{ display:'none' }} />
       <button onClick={()=>inputRef.current&&inputRef.current.click()} disabled={loading}
         style={{ width:'100%', padding:'18px', borderRadius:12, border:`2px dashed ${C.line}`,
-          background:'white', cursor:'pointer', marginBottom:16 }}>
+          background:C.card, cursor:'pointer', marginBottom:16 }}>
         <div style={{ fontSize:15, fontWeight:700, color:C.ink }}>{loading?'Loading…':'Choose file'}</div>
         <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>Works on desktop · may not work on mobile Chrome</div>
       </button>
@@ -1102,7 +1152,7 @@ function ImportScreen({ onImport, onAccount }) {
         placeholder="Paste your LLN CSV/JSON export here…"
         style={{ width:'100%', height:110, padding:12, borderRadius:8,
           border:`2px solid ${error?C.wrong:C.line}`, fontSize:12, resize:'vertical', outline:'none' }} />
-      {error && <div style={{ color:C.wrong, fontSize:12, marginTop:6, padding:'8px 12px', background:'#fdecea', borderRadius:8 }}>{error}</div>}
+      {error && <div style={{ color:C.wrong, fontSize:12, marginTop:6, padding:'8px 12px', background:C.softRed, borderRadius:8 }}>{error}</div>}
       {text.trim() && (
         <button onClick={()=>process(text)} disabled={loading}
           style={{ marginTop:10, width:'100%', padding:'14px', borderRadius:8, border:'none',
@@ -1116,7 +1166,7 @@ function ImportScreen({ onImport, onAccount }) {
         Saved Words → ⋯ menu → Export → TSV/CSV
       </div>
       <button onClick={onAccount}
-        style={{ ...btn('white',C.ink), border:`1px solid ${C.line}`, flex:'unset', width:'100%', marginTop:16 }}>
+        style={{ ...btn(C.card,C.ink), border:`1px solid ${C.line}`, flex:'unset', width:'100%', marginTop:16 }}>
         Already have an account? Log in with Sync ID
       </button>
     </div>
@@ -1162,8 +1212,8 @@ function KanjiMode({ items, onTapWord }) {
     const words = kanjiMap[selected] || [];
     return React.createElement('div', { style:{ display:'flex', flexDirection:'column', gap:16 } },
       React.createElement('button', { onClick:()=>setSelected(null),
-        style:{ ...btn('white',C.ink), border:`1px solid ${C.line}`, flex:'unset', alignSelf:'flex-start', padding:'6px 14px' } }, '← Back'),
-      React.createElement('div', { style:{ background:'white', borderRadius:10, border:`1px solid ${C.line}`, padding:18 } },
+        style:{ ...btn(C.card,C.ink), border:`1px solid ${C.line}`, flex:'unset', alignSelf:'flex-start', padding:'6px 14px' } }, '← Back'),
+      React.createElement('div', { style:{ background:C.card, borderRadius:10, border:`1px solid ${C.line}`, padding:18 } },
         React.createElement(KanjiInfoCard, { char:selected })
       ),
       React.createElement('div', null,
@@ -1171,7 +1221,7 @@ function KanjiMode({ items, onTapWord }) {
           `Words with ${selected} (${words.length})`),
         React.createElement('div', { style:{ display:'flex', flexDirection:'column', gap:6 } },
           words.map(w => React.createElement('div', { key:w.id,
-            style:{ display:'flex', alignItems:'center', gap:12, background:'white',
+            style:{ display:'flex', alignItems:'center', gap:12, background:C.card,
               borderRadius:8, padding:'10px 14px', border:`1px solid ${C.line}` }},
             React.createElement('div', { style:{ fontSize:22, fontWeight:700, color:C.ink, minWidth:44 } },
               React.createElement(TappableKanji, { text:w.word, onTapKanji:(ch)=>setSelected(ch) })),
@@ -1192,7 +1242,7 @@ function KanjiMode({ items, onTapWord }) {
       React.createElement('input', { value:search, onChange:e=>setSearch(e.target.value),
         placeholder:'Search a kanji…',
         style:{ width:'100%', padding:'11px 36px 11px 14px', borderRadius:8,
-          border:`1px solid ${C.line}`, fontSize:14, outline:'none', boxSizing:'border-box', background:'white' } }),
+          border:`1px solid ${C.line}`, fontSize:14, outline:'none', boxSizing:'border-box', background:C.card } }),
       search && React.createElement('button', { onClick:()=>setSearch(''),
         style:{ position:'absolute', right:8, top:'50%', transform:'translateY(-50%)',
           background:'none', border:'none', color:C.muted, cursor:'pointer', fontSize:16 } }, '✕')
@@ -1204,7 +1254,7 @@ function KanjiMode({ items, onTapWord }) {
           q ? 'No kanji match.' : 'No kanji found in your words yet.')
       : React.createElement('div', { style:{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(64px, 1fr))', gap:8 } },
           filtered.map(k => React.createElement('button', { key:k, onClick:()=>setSelected(k),
-            style:{ aspectRatio:'1', background:'white', border:`1px solid ${C.line}`, borderRadius:8,
+            style:{ aspectRatio:'1', background:C.card, border:`1px solid ${C.line}`, borderRadius:8,
               cursor:'pointer', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', padding:4 }},
             React.createElement('div', { style:{ fontSize:28, fontWeight:700, color:C.ink, lineHeight:1 } }, k),
             React.createElement('div', { style:{ fontSize:10, color:C.muted, marginTop:3 } }, `${kanjiMap[k].length} word${kanjiMap[k].length===1?'':'s'}`)
@@ -1237,6 +1287,13 @@ function App() {
   const [deckLoaded, setDeckLoaded] = useState(false);
   const currentWordRef = useRef(null);
   const [kanjiPopup, setKanjiPopup] = useState(null);
+  const [theme, setTheme] = useState(loadTheme);
+  const toggleTheme = () => {
+    const next = theme === 'dark' ? 'light' : 'dark';
+    applyTheme(next);
+    setTheme(next);
+  };
+  useEffect(() => { applyTheme(theme); }, []);
 
   useEffect(() => {
     (async () => {
@@ -1407,7 +1464,7 @@ function App() {
     style:{ minHeight:'100vh', background:C.paper, paddingTop:20 }},
     React.createElement(AccountScreen, { onClose:()=>setShowAccount(false), onReset:resetProgress,
       onClearWords:clearWords, sessionSize, onSessionSize:setSessionSize,
-      masteryTarget, onMasteryTarget:setMasteryTarget }));
+      masteryTarget, onMasteryTarget:setMasteryTarget, theme, onToggleTheme:toggleTheme }));
 
   if (!items) return React.createElement('div', {
     style:{ minHeight:'100vh', background:C.paper, display:'flex', alignItems:'center' }},
@@ -1444,10 +1501,10 @@ function App() {
         React.createElement('span', { style:{ flex:1 } },
           allMastered ? 'All words mastered! Reviewing all.' : `${masteredCount} of ${items.length} mastered`),
         React.createElement('button', { onClick:()=>{ const id=currentWordRef.current; if(id){ const w=idToItem[id]; if(w && confirm(`Delete "${w.word}"?`)) handleRemove(id); } },
-          style:{ background:'white', border:`1px solid ${C.line}`, borderRadius:6,
+          style:{ background:C.card, border:`1px solid ${C.line}`, borderRadius:6,
             padding:'5px 10px', fontSize:12, cursor:'pointer', color:C.wrong, flexShrink:0 } }, 'Delete word'),
         React.createElement('button', { onClick:()=>{ if(confirm('Shuffle in a new set of words? Your current active set will be replaced (progress is kept).')) reshuffle(); },
-          style:{ background:'white', border:`1px solid ${C.line}`, borderRadius:6,
+          style:{ background:C.card, border:`1px solid ${C.line}`, borderRadius:6,
             padding:'5px 10px', fontSize:12, cursor:'pointer', color:C.ink, flexShrink:0 } }, 'New set')
       ),
       mode==='write' && (deckEmpty
