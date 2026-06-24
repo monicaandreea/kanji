@@ -321,6 +321,29 @@ function annotateSentence(sentence, cb) {
   });
 }
 
+// Convert a word to its hiragana reading using kuroshiro
+const readingCache = {};
+function getHiraganaReading(word, fallback, cb) {
+  if (readingCache[word] !== undefined) { cb(readingCache[word]); return; }
+  initKuroshiro(k => {
+    if (!k) { cb(fallback || ''); return; }
+    k.convert(word, { mode: 'normal', to: 'hiragana' }).then(hira => {
+      readingCache[word] = hira;
+      cb(hira);
+    }).catch(() => cb(fallback || ''));
+  });
+}
+
+// Small component that shows a word's reading in hiragana
+function KanaReading({ word, fallback, style }) {
+  const [kana, setKana] = React.useState(null);
+  React.useEffect(() => {
+    setKana(null);
+    getHiraganaReading(word, fallback, setKana);
+  }, [word]);
+  return React.createElement('span', { style }, kana || fallback || '');
+}
+
 function SentenceDisplay({ sentence, sentenceEn, word, reading, showEn }) {
   const [furiganaHtml, setFuriganaHtml] = React.useState(null);
 
@@ -456,7 +479,7 @@ function WriteMode({ items, progress, onAnswer, onRemove }) {
         <div style={{ width:'100%' }}>
           <div style={{ textAlign:'center', marginBottom:8 }}>
             <div style={{ fontSize:13, color:C.muted, marginBottom:4 }}>
-              {item.word} · <span style={{ fontFamily:'monospace' }}>{item.reading}</span>
+              {item.word} · <KanaReading word={item.word} fallback={item.reading} />
             </div>
             <StrokeOrder word={item.word} />
           </div>
@@ -530,7 +553,7 @@ function QuizMode({ items, progress, onAnswer, onRemove }) {
     <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
       <div style={{ textAlign:'center', minHeight:90 }}>
         <div style={{ fontSize:64, fontWeight:700, letterSpacing:4, color:C.ink, lineHeight:1 }}>{item.word}</div>
-        {revealed && <div style={{ fontSize:15, color:C.muted, marginTop:4, fontFamily:'monospace' }}>{item.reading}</div>}
+        {revealed && <div style={{ fontSize:15, color:C.muted, marginTop:4 }}><KanaReading word={item.word} fallback={item.reading} /></div>}
         <div style={{ fontSize:11, color:C.muted, marginTop:4 }}>✓ {p.correct} · ✗ {p.wrong}
           <button onClick={remove} style={{ marginLeft:10, background:'none', border:'none',
             color:C.muted, cursor:'pointer', fontSize:11, padding:'0 4px' }}>✕ remove</button>
@@ -626,7 +649,7 @@ function AddWordForm({ onAdd, onClose }) {
 }
 
 // ── Account screen — full page for sync ID management ────────────────────
-function AccountScreen({ onClose }) {
+function AccountScreen({ onClose, onReset, onClearWords }) {
   const [userId, setUserIdState] = React.useState(getUserId());
   const [input, setInput] = React.useState('');
   const [copied, setCopied] = React.useState(false);
@@ -674,8 +697,19 @@ function AccountScreen({ onClose }) {
         fontSize: 13, fontFamily: 'monospace', outline: 'none', boxSizing: 'border-box', marginBottom: 10 }
     }),
     React.createElement('button', { onClick: apply, disabled: !input.trim(),
-      style: { ...btn(input.trim() ? C.ink : C.line, 'white'), flex: 'unset', width: '100%' }
-    }, 'Switch to this account')
+      style: { ...btn(input.trim() ? C.ink : C.line, 'white'), flex: 'unset', width: '100%', marginBottom: 28 }
+    }, 'Switch to this account'),
+
+    onReset && React.createElement(React.Fragment, null,
+      React.createElement('div', { style: { height: 1, background: C.line, marginBottom: 24 } }),
+      React.createElement('div', { style: { fontSize: 14, color: C.ink, fontWeight: 600, marginBottom: 12 } }, 'Danger zone'),
+      React.createElement('button', { onClick: onReset,
+        style: { ...btn('white', C.wrong), border: `1px solid ${C.wrong}`, flex: 'unset', width: '100%', marginBottom: 10 }
+      }, 'Reset all progress'),
+      React.createElement('button', { onClick: onClearWords,
+        style: { ...btn('white', C.muted), border: `1px solid ${C.line}`, flex: 'unset', width: '100%' }
+      }, 'Load a different word list')
+    )
   );
 }
 
@@ -743,11 +777,20 @@ function AddListForm({ onMerge, onClose }) {
   );
 }
 
-function StatsMode({ items, progress, onReset, onClearWords, onRemove, onAdd, onMerge, onAccount }) {
+function WordsMode({ items, progress, onRemove, onAdd, onMerge, onResetWord }) {
   const [showAdd, setShowAdd] = useState(false);
   const [showAddList, setShowAddList] = useState(false);
+  const [search, setSearch] = useState('');
   const studied = items.filter(it=>(progress[it.id]?.correct||0)+(progress[it.id]?.wrong||0)>0).length;
-  const mastered = items.filter(it=>(progress[it.id]?.correct||0)>=3).length;
+  const mastered = items.filter(it=>(progress[it.id]?.streak||0)>=5).length;
+
+  const q = search.trim().toLowerCase();
+  const filtered = items.filter(it => {
+    if (!q) return true;
+    return it.word.toLowerCase().includes(q)
+      || (it.reading||'').toLowerCase().includes(q)
+      || it.meanings.some(m => m.toLowerCase().includes(q));
+  });
 
   return (
     <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
@@ -766,39 +809,64 @@ function StatsMode({ items, progress, onReset, onClearWords, onRemove, onAdd, on
         <button onClick={()=>setShowAdd(true)} style={{ ...btn(C.ink,'white') }}>+ Add word</button>
         <button onClick={()=>setShowAddList(true)} style={{ ...btn('white',C.ink), border:`2px solid ${C.ink}` }}>+ Add list</button>
       </div>
+
+      {/* Search bar */}
+      <div style={{ position:'relative' }}>
+        <input value={search} onChange={e=>setSearch(e.target.value)}
+          placeholder="Search words, readings, meanings…"
+          style={{ width:'100%', padding:'11px 36px 11px 14px', borderRadius:8,
+            border:`1px solid ${C.line}`, fontSize:14, outline:'none', boxSizing:'border-box', background:'white' }} />
+        {search && React.createElement('button', { onClick:()=>setSearch(''),
+          style:{ position:'absolute', right:8, top:'50%', transform:'translateY(-50%)',
+            background:'none', border:'none', color:C.muted, cursor:'pointer', fontSize:16 } }, '✕')}
+      </div>
+
       <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
-        {[...items].sort((a,b)=>{
+        {filtered.length === 0 && React.createElement('div', { style:{ textAlign:'center', color:C.muted, fontSize:13, padding:'20px' } },
+          q ? 'No words match your search.' : 'No words yet.')}
+        {[...filtered].sort((a,b)=>{
           const pa=progress[a.id]||{}, pb=progress[b.id]||{};
           return ((pb.correct||0)+(pb.wrong||0))-((pa.correct||0)+(pa.wrong||0));
         }).map(item => {
-          const p=progress[item.id]||{correct:0,wrong:0};
+          const p=progress[item.id]||{correct:0,wrong:0,streak:0};
           const total=p.correct+p.wrong;
           const pct=total>0?Math.round((p.correct/total)*100):null;
+          const streak=p.streak||0;
+          const isMastered=streak>=5;
           return React.createElement('div', { key:item.id,
-            style:{ display:'flex', alignItems:'center', gap:12, background:'white',
-              borderRadius:8, padding:'10px 14px', border:`1px solid ${C.line}` }},
-            React.createElement('div', { style:{ fontSize:24, fontWeight:700, color:C.ink, minWidth:48 } }, item.word),
-            React.createElement('div', { style:{ flex:1 } },
-              React.createElement('div', { style:{ fontSize:12, color:C.muted, fontFamily:'monospace' } }, item.reading),
-              React.createElement('div', { style:{ fontSize:13, color:C.ink } }, item.meanings[0])
+            style:{ display:'flex', alignItems:'center', gap:10,
+              background: isMastered ? '#f0f7f2' : 'white',
+              borderRadius:8, padding:'10px 12px',
+              border:`1px solid ${isMastered ? C.correct : C.line}` }},
+            React.createElement('div', { style:{ fontSize:24, fontWeight:700, color:C.ink, minWidth:44 } }, item.word),
+            React.createElement('div', { style:{ flex:1, minWidth:0 } },
+              React.createElement('div', { style:{ fontSize:12, color:C.muted } },
+                React.createElement(KanaReading, { word:item.word, fallback:item.reading })),
+              React.createElement('div', { style:{ fontSize:13, color:C.ink, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' } }, item.meanings[0])
             ),
-            React.createElement('div', { style:{ textAlign:'right', fontSize:12 } },
-              total===0 ? React.createElement('span', { style:{ color:C.muted } }, 'unseen')
-              : React.createElement(React.Fragment, null,
-                  React.createElement('div', { style:{ color:pct>=70?C.correct:C.wrong, fontWeight:700 } }, pct+'%'),
-                  React.createElement('div', { style:{ color:C.muted } }, `${p.correct}✓ ${p.wrong}✗`)
-                )
+            React.createElement('div', { style:{ textAlign:'right', fontSize:12, minWidth:54 } },
+              isMastered
+                ? React.createElement('div', { style:{ color:C.correct, fontWeight:700 } }, '★ done')
+                : total===0
+                  ? React.createElement('span', { style:{ color:C.muted } }, 'unseen')
+                  : React.createElement(React.Fragment, null,
+                      React.createElement('div', { style:{ color:streak>0?C.correct:C.muted, fontWeight:700 } }, `🔥 ${streak}/5`),
+                      React.createElement('div', { style:{ color:C.muted } }, `${pct}%`)
+                    )
             ),
             React.createElement('button', {
+              onClick:()=>{ if(total>0 && confirm(`Reset progress for "${item.word}"?`)) onResetWord(item.id); },
+              title:'Reset progress for this word',
+              style:{ background:'none', border:'none', color:total>0?C.gold:C.line, cursor:total>0?'pointer':'default', fontSize:15, padding:'4px 4px', flexShrink:0 }
+            }, '↺'),
+            React.createElement('button', {
               onClick:()=>{ if(confirm(`Remove "${item.word}"?`)) onRemove(item.id); },
-              style:{ background:'none', border:'none', color:C.muted, cursor:'pointer', fontSize:16, padding:'4px 6px', flexShrink:0 }
+              title:'Remove word',
+              style:{ background:'none', border:'none', color:C.muted, cursor:'pointer', fontSize:15, padding:'4px 4px', flexShrink:0 }
             }, '✕')
           );
         })}
       </div>
-      <button onClick={onAccount} style={{ ...btn('white',C.ink), border:`1px solid ${C.line}` }}>⚙ Account & sync</button>
-      <button onClick={onReset} style={{ ...btn('white',C.wrong), border:`1px solid ${C.wrong}` }}>Reset progress</button>
-      <button onClick={onClearWords} style={{ ...btn('white',C.muted), border:`1px solid ${C.line}` }}>Load a different word list</button>
     </div>
   );
 }
@@ -908,8 +976,12 @@ function App() {
   };
   const handleAnswer = (id, correct) => {
     setProgress(prev => {
-      const e = prev[id]||{correct:0,wrong:0};
-      const next = { ...prev, [id]:{ correct:e.correct+(correct?1:0), wrong:e.wrong+(correct?0:1) } };
+      const e = prev[id]||{correct:0,wrong:0,streak:0};
+      const next = { ...prev, [id]:{
+        correct: e.correct+(correct?1:0),
+        wrong: e.wrong+(correct?0:1),
+        streak: correct ? (e.streak||0)+1 : 0,
+      } };
       storageSet(PROGRESS_KEY, next);
       return next;
     });
@@ -924,6 +996,14 @@ function App() {
     if (!confirm('Reset all your progress?')) return;
     setProgress({}); storageSet(PROGRESS_KEY, {});
   };
+  const resetWord = (id) => {
+    setProgress(prev => {
+      const next = { ...prev };
+      delete next[id];
+      storageSet(PROGRESS_KEY, next);
+      return next;
+    });
+  };
   const clearWords = () => {
     if (!confirm('Load a new word list? This won\'t delete your progress.')) return;
     setItems(null); storageSet(WORDS_KEY, null);
@@ -935,35 +1015,36 @@ function App() {
 
   if (showAccount) return React.createElement('div', {
     style:{ minHeight:'100vh', background:C.paper, paddingTop:20 }},
-    React.createElement(AccountScreen, { onClose:()=>setShowAccount(false) }));
+    React.createElement(AccountScreen, { onClose:()=>setShowAccount(false), onReset:resetProgress, onClearWords:clearWords }));
 
   if (!items) return React.createElement('div', {
     style:{ minHeight:'100vh', background:C.paper, display:'flex', alignItems:'center' }},
     React.createElement(ImportScreen, { onImport:handleImport, onAccount:()=>setShowAccount(true) }));
 
   const sorted = [...items].sort((a,b)=>{
-    const pa=progress[a.id]||{correct:0,wrong:0}, pb=progress[b.id]||{correct:0,wrong:0};
-    return (pa.correct-pa.wrong*0.5)-(pb.correct-pb.wrong*0.5);
+    const pa=progress[a.id]||{correct:0,wrong:0,streak:0}, pb=progress[b.id]||{correct:0,wrong:0,streak:0};
+    // Lower streak first (words closer to mastery get practiced more)
+    return (pa.streak||0)-(pb.streak||0);
   });
 
   return React.createElement('div', { style:{ minHeight:'100vh', background:C.paper } },
     React.createElement('div', { style:{ background:C.ink, color:'white', padding:'12px 16px',
       display:'flex', alignItems:'center', justifyContent:'space-between' }},
       React.createElement('div', { style:{ fontSize:18, fontWeight:700 } }, '漢字 ',
-        React.createElement('span', { style:{ fontSize:12, opacity:0.6, fontWeight:400 } }, items.length+' words · v4')),
-      React.createElement('div', { style:{ display:'flex', gap:4 } },
-        [['write','✏️'],['quiz','🎯'],['stats','📊']].map(([m,icon])=>
-          React.createElement('button', { key:m, onClick:()=>setMode(m), style:{
-            padding:'6px 12px', borderRadius:6, border:'none',
+        React.createElement('span', { style:{ fontSize:12, opacity:0.6, fontWeight:400 } }, items.length+' words')),
+      React.createElement('div', { style:{ display:'flex', gap:2 } },
+        [['write','✏️','Write'],['quiz','🎯','Quiz'],['words','📖','Words'],['account','⚙','']].map(([m,icon,label])=>
+          React.createElement('button', { key:m, onClick:()=> m==='account' ? setShowAccount(true) : setMode(m), style:{
+            padding:'6px 10px', borderRadius:6, border:'none',
             background:mode===m?'rgba(255,255,255,0.2)':'transparent',
-            color:'white', fontSize:13, cursor:'pointer' }}, icon+' '+m)
+            color:'white', fontSize:13, cursor:'pointer' }}, label ? icon+' '+label : icon)
         )
       )
     ),
     React.createElement('div', { style:{ maxWidth:420, margin:'0 auto', padding:20 } },
       mode==='write' && React.createElement(WriteMode, { items:sorted, progress, onAnswer:handleAnswer, onRemove:handleRemove }),
       mode==='quiz' && React.createElement(QuizMode, { key:items.length, items:sorted, progress, onAnswer:handleAnswer, onRemove:handleRemove }),
-      mode==='stats' && React.createElement(StatsMode, { items, progress, onReset:resetProgress, onClearWords:clearWords, onRemove:handleRemove, onAdd:handleAdd, onMerge:handleMerge, onAccount:()=>setShowAccount(true) })
+      mode==='words' && React.createElement(WordsMode, { items, progress, onRemove:handleRemove, onAdd:handleAdd, onMerge:handleMerge, onResetWord:resetWord })
     )
   );
 }
