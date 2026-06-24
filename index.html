@@ -137,17 +137,76 @@ function parseLLN(raw) {
   } catch(e) { return null; }
 }
 
+// ── Furigana via Kuroshiro + kuromoji (lazy-loaded) ──────────────────────
+// Scripts are loaded only when the first sentence is shown, not on startup.
+let kuroshiroInstance = null;
+let kuroshiroReady = false;
+let kuroshiroQueue = [];
+
+function loadKuroshiro(cb) {
+  if (kuroshiroReady) { cb(kuroshiroInstance); return; }
+  kuroshiroQueue.push(cb);
+  if (window._kuroshiroLoading) return;
+  window._kuroshiroLoading = true;
+
+  function loadScript(src, onload) {
+    const s = document.createElement('script');
+    s.src = src; s.onload = onload; document.head.appendChild(s);
+  }
+
+  loadScript('https://cdn.jsdelivr.net/npm/kuroshiro@1.2.0/dist/kuroshiro.min.js', () => {
+    loadScript('https://cdn.jsdelivr.net/npm/kuroshiro-analyzer-kuromoji@1.1.0/dist/kuroshiro-analyzer-kuromoji.min.js', () => {
+      const k = new Kuroshiro();
+      k.init(new KuromojiAnalyzer({
+        dictPath: 'https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/dict/'
+      })).then(() => {
+        kuroshiroInstance = k;
+        kuroshiroReady = true;
+        kuroshiroQueue.forEach(fn => fn(k));
+        kuroshiroQueue = [];
+      });
+    });
+  });
+}
+
+const furiganaCache = {};
+
+function annotateSentence(sentence, cb) {
+  if (furiganaCache[sentence] !== undefined) { cb(furiganaCache[sentence]); return; }
+  furiganaCache[sentence] = null;
+  loadKuroshiro(k => {
+    k.convert(sentence, { mode: 'furigana', to: 'hiragana' }).then(html => {
+      furiganaCache[sentence] = html;
+      cb(html);
+    }).catch(() => { cb(null); });
+  });
+}
+
 function SentenceDisplay({ sentence, sentenceEn, word, reading, showEn }) {
+  const [furiganaHtml, setFuriganaHtml] = React.useState(null);
+
+  React.useEffect(() => {
+    if (!sentence) return;
+    setFuriganaHtml(null);
+    annotateSentence(sentence, html => setFuriganaHtml(html));
+  }, [sentence]);
+
   if (!sentence) return null;
-  // Highlight target word in bold, plain text otherwise (no API needed)
-  const parts = sentence.split(word);
-  return React.createElement('div', { style: { fontSize: 14, lineHeight: 2, color: C.ink } },
-    React.createElement('div', null,
-      parts.map((part, i) => React.createElement(React.Fragment, { key: i },
-        part,
-        i < parts.length - 1 && React.createElement('span', { style: { fontWeight: 700 } }, word)
-      ))
-    ),
+
+  // While loading, show plain sentence; once ready inject ruby HTML
+  const inner = furiganaHtml
+    ? React.createElement('span', {
+        dangerouslySetInnerHTML: { __html: furiganaHtml },
+        style: { '--target': `"${word}"` }
+      })
+    : React.createElement('span', null, sentence);
+
+  return React.createElement('div', { style: { fontSize: 14, lineHeight: 2.4, color: C.ink } },
+    React.createElement('style', null, `
+      ruby { display: inline-flex; flex-direction: column-reverse; vertical-align: bottom; line-height: 1; margin: 0 1px; }
+      ruby rt { font-size: 0.55em; color: #8a8478; text-align: center; line-height: 1.2; }
+    `),
+    React.createElement('div', null, inner),
     showEn && sentenceEn && React.createElement('div', {
       style: { color: C.muted, fontSize: 12, marginTop: 4, lineHeight: 1.5 }
     }, sentenceEn)
