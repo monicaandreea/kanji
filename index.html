@@ -158,12 +158,14 @@ const LIGHT = {
   muted: "#8a8478", line: "#d4cfc4", correct: "#2d6a4f",
   wrong: "#c0392b", gold: "#9b7fc4", card: "#ffffff",
   softGreen: "#f0f7f2", softGreenBright: "#e8f5e9", softRed: "#fdecea",
+  accent: "#2e1a3e", header: "#2e1a3e",
 };
 const DARK = {
   ink: "#e8def5", paper: "#1a1320", paperDark: "#241a2e",
   muted: "#9a8fa8", line: "#3a2f47", correct: "#52b788",
   wrong: "#e57373", gold: "#b89ad8", card: "#241a2e",
   softGreen: "#1e2e24", softGreenBright: "#1e3a2a", softRed: "#3a2020",
+  accent: "#6b4a8f", header: "#2a1d38",
 };
 const THEME_KEY = "kanji-theme";
 function loadTheme() {
@@ -629,7 +631,7 @@ function WriteMode({ items, progress, onAnswer, onCurrentWord, onTapKanji }) {
       {phase === 'write' ? (
         <div style={{ display:'flex', gap:10, width:'100%' }}>
           <button onClick={clear} style={btn(C.line, C.ink)}>Clear</button>
-          <button onClick={reveal} style={{ ...btn(C.ink,'white'), flex:2 }}>Reveal</button>
+          <button onClick={reveal} style={{ ...btn(C.accent,'white'), flex:2 }}>Reveal</button>
         </div>
       ) : (
         <div style={{ display:'flex', flexDirection:'column', gap:10, width:'100%' }}>
@@ -778,7 +780,7 @@ function AddWordForm({ onAdd, onClose, editItem }) {
       error && React.createElement('div', { style:{ color:C.wrong, fontSize:12, marginBottom:12 } }, error),
       React.createElement('div', { style:{ display:'flex', gap:10 } },
         React.createElement('button', { onClick:onClose, style:btn(C.line, C.ink) }, 'Cancel'),
-        React.createElement('button', { onClick:submit, style:btn(C.ink,'white') }, isEdit ? 'Save changes' : 'Add word')
+        React.createElement('button', { onClick:submit, style:btn(C.accent,'white') }, isEdit ? 'Save changes' : 'Add word')
       )
     )
   );
@@ -840,7 +842,7 @@ function AccountScreen({ onClose, onReset, onClearWords, sessionSize, onSessionS
         padding: '12px 14px', borderRadius: 8, wordBreak: 'break-all', color: C.ink, marginBottom: 8 }
     }, userId),
     React.createElement('button', { onClick: copy,
-      style: { ...btn(C.ink, 'white'), flex: 'unset', width: '100%', marginBottom: 28 }
+      style: { ...btn(C.accent, 'white'), flex: 'unset', width: '100%', marginBottom: 28 }
     }, copied ? '✓ Copied to clipboard' : 'Copy my Sync ID'),
 
     React.createElement('div', { style: { height: 1, background: C.line, marginBottom: 24 } }),
@@ -853,8 +855,8 @@ function AccountScreen({ onClose, onReset, onClearWords, sessionSize, onSessionS
         React.createElement('button', { key: n,
           onClick: () => { setSizeInput(String(n)); onSessionSize(n); },
           style: { flex: 1, padding: '10px', borderRadius: 8,
-            border: `2px solid ${sessionSize === n ? C.ink : C.line}`,
-            background: sessionSize === n ? C.ink : C.card,
+            border: `2px solid ${sessionSize === n ? C.accent : C.line}`,
+            background: sessionSize === n ? C.accent : C.card,
             color: sessionSize === n ? 'white' : C.ink,
             fontWeight: 600, cursor: 'pointer', fontSize: 14 } }, n)
       )
@@ -867,7 +869,7 @@ function AccountScreen({ onClose, onReset, onClearWords, sessionSize, onSessionS
           fontSize: 14, outline: 'none', boxSizing: 'border-box' } }),
       React.createElement('button', {
         onClick: () => { const n = parseInt(sizeInput, 10); if (Number.isFinite(n) && n > 0) onSessionSize(n); },
-        style: { ...btn(C.ink, 'white'), flex: 'unset', padding: '10px 18px' } }, 'Set')
+        style: { ...btn(C.accent, 'white'), flex: 'unset', padding: '10px 18px' } }, 'Set')
     ),
 
     React.createElement('div', { style: { height: 1, background: C.line, marginBottom: 24 } }),
@@ -880,8 +882,8 @@ function AccountScreen({ onClose, onReset, onClearWords, sessionSize, onSessionS
         React.createElement('button', { key: n,
           onClick: () => onMasteryTarget(n),
           style: { flex: 1, padding: '10px', borderRadius: 8,
-            border: `2px solid ${masteryTarget === n ? C.ink : C.line}`,
-            background: masteryTarget === n ? C.ink : C.card,
+            border: `2px solid ${masteryTarget === n ? C.accent : C.line}`,
+            background: masteryTarget === n ? C.accent : C.card,
             color: masteryTarget === n ? 'white' : C.ink,
             fontWeight: 600, cursor: 'pointer', fontSize: 14 } }, n)
       )
@@ -899,7 +901,7 @@ function AccountScreen({ onClose, onReset, onClearWords, sessionSize, onSessionS
         fontSize: 13, fontFamily: 'monospace', outline: 'none', boxSizing: 'border-box', marginBottom: 10 }
     }),
     React.createElement('button', { onClick: apply, disabled: !input.trim(),
-      style: { ...btn(input.trim() ? C.ink : C.line, 'white'), flex: 'unset', width: '100%', marginBottom: 28 }
+      style: { ...btn(input.trim() ? C.accent : C.line, 'white'), flex: 'unset', width: '100%', marginBottom: 28 }
     }, 'Switch to this account'),
 
     onReset && React.createElement(React.Fragment, null,
@@ -972,7 +974,7 @@ function AddListForm({ onMerge, onClose }) {
           outline: 'none', boxSizing: 'border-box' } }),
       error && React.createElement('div', { style: { color: C.wrong, fontSize: 12, marginTop: 6 } }, error),
       text.trim() && React.createElement('button', { onClick: () => process(text), disabled: loading,
-        style: { ...btn(C.ink, 'white'), flex: 'unset', width: '100%', marginTop: 10 }
+        style: { ...btn(C.accent, 'white'), flex: 'unset', width: '100%', marginTop: 10 }
       }, loading ? 'Loading…' : 'Add words')
     )
   );
@@ -1010,7 +1012,7 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
         )}
       </div>
       <div style={{ display:'flex', gap:10 }}>
-        <button onClick={()=>setShowAdd(true)} style={{ ...btn(C.ink,'white') }}>+ Add word</button>
+        <button onClick={()=>setShowAdd(true)} style={{ ...btn(C.accent,'white') }}>+ Add word</button>
         <button onClick={()=>setShowAddList(true)} style={{ ...btn(C.card,C.ink), border:`2px solid ${C.ink}` }}>+ Add list</button>
       </div>
 
@@ -1156,7 +1158,7 @@ function ImportScreen({ onImport, onAccount }) {
       {text.trim() && (
         <button onClick={()=>process(text)} disabled={loading}
           style={{ marginTop:10, width:'100%', padding:'14px', borderRadius:8, border:'none',
-            background:C.ink, color:'white', fontSize:15, fontWeight:700, cursor:'pointer' }}>
+            background:C.accent, color:'white', fontSize:15, fontWeight:700, cursor:'pointer' }}>
           {loading?'Loading…':'Load words'}
         </button>
       )}
@@ -1480,7 +1482,7 @@ function App() {
   const allMastered = masteredCount === items.length && items.length > 0;
 
   return React.createElement('div', { style:{ minHeight:'100vh', background:C.paper } },
-    React.createElement('div', { style:{ background:C.ink, color:'white', padding:'12px 16px',
+    React.createElement('div', { style:{ background:C.header, color:'white', padding:'12px 16px',
       display:'flex', alignItems:'center', justifyContent:'space-between' }},
       React.createElement('div', { style:{ fontSize:18, fontWeight:700 } }, '漢字'),
       React.createElement('div', { style:{ display:'flex', gap:2 } },
