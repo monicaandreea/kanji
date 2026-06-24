@@ -162,8 +162,8 @@ const LIGHT = {
 };
 const DARK = {
   ink: "#e8def5", paper: "#1a1320", paperDark: "#241a2e",
-  muted: "#9a8fa8", line: "#3a2f47", correct: "#52b788",
-  wrong: "#e57373", gold: "#b89ad8", card: "#241a2e",
+  muted: "#9a8fa8", line: "#3a2f47", correct: "#3a8f63",
+  wrong: "#b04a4a", gold: "#b89ad8", card: "#241a2e",
   softGreen: "#1e2e24", softGreenBright: "#1e3a2a", softRed: "#3a2020",
   accent: "#6b4a8f", header: "#2a1d38",
 };
@@ -742,7 +742,7 @@ function FormField({ label, value, setter, placeholder, hint, clearError }) {
   );
 }
 
-function AddWordForm({ onAdd, onClose, editItem }) {
+function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemove, onResetWord, onMarkMastered }) {
   const [word, setWord] = useState(editItem ? editItem.word : '');
   const [reading, setReading] = useState(editItem ? (editItem.reading||'') : '');
   const [meanings, setMeanings] = useState(editItem ? (editItem.meanings||[]).join(', ') : '');
@@ -750,6 +750,9 @@ function AddWordForm({ onAdd, onClose, editItem }) {
   const [sentenceEn, setSentenceEn] = useState(editItem ? (editItem.sentenceEn||'') : '');
   const [error, setError] = useState('');
   const isEdit = !!editItem;
+  const ep = (editItem && progress && progress[editItem.id]) || { correct:0, wrong:0, streak:0 };
+  const hasProgress = (ep.correct||0)+(ep.wrong||0) > 0;
+  const isMastered = (ep.streak||0) >= (masteryTarget||5);
 
   const submit = () => {
     if (!word.trim()) { setError('Word is required'); return; }
@@ -771,6 +774,28 @@ function AddWordForm({ onAdd, onClose, editItem }) {
       React.createElement('div', { style:{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20 } },
         React.createElement('div', { style:{ fontSize:17, fontWeight:700, color:C.ink } }, isEdit ? 'Edit word' : 'Add word'),
         React.createElement('button', { onClick:onClose, style:{ background:'none', border:'none', fontSize:20, cursor:'pointer', color:C.muted } }, '✕')
+      ),
+      // Quick actions (edit mode only)
+      isEdit && React.createElement('div', { style:{ display:'flex', gap:8, marginBottom:18 } },
+        React.createElement('button', {
+          onClick: () => { if (!isMastered) onMarkMastered(); },
+          disabled: isMastered,
+          style:{ flex:1, padding:'9px 6px', borderRadius:8, border:`1px solid ${C.correct}`,
+            background: isMastered ? C.softGreen : 'transparent', color:C.correct,
+            cursor: isMastered ? 'default' : 'pointer', fontSize:12, fontWeight:600 }
+        }, isMastered ? '✓ Mastered' : 'Mark mastered'),
+        React.createElement('button', {
+          onClick: () => { if (hasProgress && confirm(`Reset progress for "${editItem.word}"?`)) onResetWord(); },
+          disabled: !hasProgress,
+          style:{ flex:1, padding:'9px 6px', borderRadius:8, border:`1px solid ${hasProgress?C.gold:C.line}`,
+            background:'transparent', color: hasProgress?C.gold:C.line,
+            cursor: hasProgress?'pointer':'default', fontSize:12, fontWeight:600 }
+        }, 'Reset progress'),
+        React.createElement('button', {
+          onClick: () => { if (confirm(`Delete "${editItem.word}"?`)) onRemove(); },
+          style:{ flex:1, padding:'9px 6px', borderRadius:8, border:`1px solid ${C.wrong}`,
+            background:'transparent', color:C.wrong, cursor:'pointer', fontSize:12, fontWeight:600 }
+        }, 'Delete')
       ),
       React.createElement(FormField, { key:'w', label:'Word *', value:word, setter:setWord, placeholder:'失敗', clearError }),
       React.createElement(FormField, { key:'r', label:'Reading', value:reading, setter:setReading, placeholder:'シッパイ', hint:'Kana reading (optional)', clearError }),
@@ -1001,7 +1026,11 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
     <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
       {showAdd && React.createElement(AddWordForm, { onAdd, onClose:()=>setShowAdd(false) })}
       {showAddList && React.createElement(AddListForm, { onMerge, onClose:()=>setShowAddList(false) })}
-      {editing && React.createElement(AddWordForm, { editItem:editing, onAdd:(w)=>onEdit(editing.id, w), onClose:()=>setEditing(null) })}
+      {editing && React.createElement(AddWordForm, { editItem:editing, onAdd:(w)=>onEdit(editing.id, w), onClose:()=>setEditing(null),
+        progress, masteryTarget,
+        onRemove:()=>{ onRemove(editing.id); setEditing(null); },
+        onResetWord:()=>{ onResetWord(editing.id); setEditing(null); },
+        onMarkMastered:()=>{ onMarkMastered(editing.id); setEditing(null); } })}
       <div style={{ display:'flex', gap:10 }}>
         {[['Total',items.length,C.ink],['Studied',studied,C.gold],['Mastered',mastered,C.correct]].map(([l,v,c])=>
           React.createElement('div', { key:l, style:{ flex:1, textAlign:'center', padding:'12px 8px',
@@ -1088,18 +1117,8 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
             React.createElement('button', {
               onClick:()=>setEditing(item),
               title:'Edit word',
-              style:{ background:'none', border:'none', color:C.muted, cursor:'pointer', fontSize:15, padding:'4px 3px', flexShrink:0 }
-            }, '✎'),
-            React.createElement('button', {
-              onClick:()=>{ if(total>0 && confirm(`Reset progress for "${item.word}"?`)) onResetWord(item.id); },
-              title:'Reset progress for this word',
-              style:{ background:'none', border:'none', color:total>0?C.gold:C.line, cursor:total>0?'pointer':'default', fontSize:16, padding:'4px 3px', flexShrink:0 }
-            }, '↺'),
-            React.createElement('button', {
-              onClick:()=>{ if(confirm(`Remove "${item.word}"?`)) onRemove(item.id); },
-              title:'Remove word',
-              style:{ background:'none', border:'none', color:C.muted, cursor:'pointer', fontSize:15, padding:'4px 3px', flexShrink:0 }
-            }, '✕')
+              style:{ background:'none', border:'none', color:C.muted, cursor:'pointer', fontSize:16, padding:'4px 4px', flexShrink:0 }
+            }, '✎')
           );
         })}
       </div>
@@ -1453,6 +1472,16 @@ function App() {
       return next;
     });
   };
+  const markMastered = (id) => {
+    setProgress(prev => {
+      const e = prev[id]||{correct:0,wrong:0,streak:0};
+      const next = { ...prev, [id]: { ...e, streak: masteryTarget, correct: Math.max(e.correct, masteryTarget) } };
+      storageSet(PROGRESS_KEY, next);
+      return next;
+    });
+    // drop it from the active deck since it's now mastered
+    setActiveIds(prev => { if(!prev) return prev; const n=prev.filter(x=>x!==id); persistDeck(n); return n; });
+  };
   const clearWords = () => {
     if (!confirm('Load a new word list? This won\'t delete your progress.')) return;
     setItems(null); storageSet(WORDS_KEY, null); setActiveIds(null); storageSet(DECK_KEY, null);
@@ -1515,7 +1544,7 @@ function App() {
       mode==='quiz' && (deckEmpty
         ? React.createElement('div', { style:{ textAlign:'center', color:C.muted, padding:'40px 20px' } }, 'No active words. Add some in the Words tab.')
         : React.createElement(QuizMode, { key:deck.length, items:deck, progress, onAnswer:handleAnswer, onCurrentWord:(id)=>{currentWordRef.current=id;}, onTapKanji:setKanjiPopup })),
-      mode==='words' && React.createElement(WordsMode, { items, progress, onRemove:handleRemove, onAdd:handleAdd, onEdit:handleEdit, onMerge:handleMerge, onResetWord:resetWord, activeIds:activeIds||[], onAddToActive:addToActive, onRemoveFromActive:removeFromActive, masteryTarget, onTapKanji:setKanjiPopup }),
+      mode==='words' && React.createElement(WordsMode, { items, progress, onRemove:handleRemove, onAdd:handleAdd, onEdit:handleEdit, onMerge:handleMerge, onResetWord:resetWord, onMarkMastered:markMastered, activeIds:activeIds||[], onAddToActive:addToActive, onRemoveFromActive:removeFromActive, masteryTarget, onTapKanji:setKanjiPopup }),
       mode==='kanji' && React.createElement(KanjiMode, { items })
     )
   );
