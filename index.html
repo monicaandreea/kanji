@@ -10,7 +10,8 @@
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: #f7f4ee; font-family: 'Segoe UI', system-ui, sans-serif; min-height: 100vh; }
-  ruby rt { font-size: 0.55em; color: #b8860b; }
+  ruby { ruby-align: center; }
+  ruby rt { font-size: 0.5em; color: #8a8478; line-height: 1; user-select: none; }
   button { font-family: inherit; }
   textarea, input { font-family: inherit; }
 </style>
@@ -339,14 +340,10 @@ function SentenceDisplay({ sentence, sentenceEn, word, reading, showEn }) {
       })
     : React.createElement('span', null, sentence);
 
-  return React.createElement('div', { style: { fontSize: 14, lineHeight: 2.4, color: C.ink } },
-    React.createElement('style', null, `
-      ruby { display: inline-flex; flex-direction: column-reverse; vertical-align: bottom; line-height: 1; margin: 0 1px; }
-      ruby rt { font-size: 0.55em; color: #8a8478; text-align: center; line-height: 1.2; }
-    `),
+  return React.createElement('div', { style: { fontSize: 17, lineHeight: 2.2, color: C.ink } },
     React.createElement('div', null, inner),
     showEn && sentenceEn && React.createElement('div', {
-      style: { color: C.muted, fontSize: 12, marginTop: 4, lineHeight: 1.5 }
+      style: { color: C.muted, fontSize: 12, marginTop: 8, lineHeight: 1.5 }
     }, sentenceEn)
   );
 }
@@ -628,75 +625,134 @@ function AddWordForm({ onAdd, onClose }) {
   );
 }
 
-function SyncPanel() {
+// ── Account screen — full page for sync ID management ────────────────────
+function AccountScreen({ onClose }) {
   const [userId, setUserIdState] = React.useState(getUserId());
-  const [editing, setEditing] = React.useState(false);
   const [input, setInput] = React.useState('');
   const [copied, setCopied] = React.useState(false);
 
   const copy = () => {
     navigator.clipboard.writeText(userId).then(() => {
       setCopied(true); setTimeout(() => setCopied(false), 2000);
-    });
+    }).catch(() => {});
   };
 
   const apply = () => {
     if (!input.trim()) return;
+    if (!confirm('Switch to this account? The app will reload and pull data from the new ID.')) return;
     setUserId(input.trim());
-    setUserIdState(input.trim());
-    setEditing(false);
-    setInput('');
-    alert('Sync ID updated! Reload the page to pull data from this ID.');
+    location.reload();
   };
 
-  return React.createElement('div', {
-    style: { background: 'white', borderRadius: 8, border: `1px solid ${C.line}`,
-      padding: '14px 16px', fontSize: 13 }
-  },
-    React.createElement('div', { style: { fontWeight: 700, color: C.ink, marginBottom: 8 } }, '🔄 Cross-device sync'),
-    React.createElement('div', { style: { color: C.muted, fontSize: 12, marginBottom: 10, lineHeight: 1.5 } },
-      'To sync to another device, copy your Sync ID and paste it on the other device.'
+  return React.createElement('div', { style: { maxWidth: 460, margin: '0 auto', padding: 24 } },
+    React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 } },
+      React.createElement('div', { style: { fontSize: 22, fontWeight: 700, color: C.ink } }, 'Account & Sync'),
+      onClose && React.createElement('button', { onClick: onClose,
+        style: { background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: C.muted } }, '✕')
     ),
-    React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 } },
-      React.createElement('div', {
-        style: { flex: 1, fontFamily: 'monospace', fontSize: 11, background: C.paperDark,
-          padding: '8px 10px', borderRadius: 6, wordBreak: 'break-all', color: C.ink }
-      }, userId),
-      React.createElement('button', {
-        onClick: copy,
-        style: { ...btn(C.ink, 'white'), flex: 'unset', padding: '8px 14px', fontSize: 12 }
-      }, copied ? '✓ Copied' : 'Copy')
-    ),
-    !editing
-      ? React.createElement('button', {
-          onClick: () => { setEditing(true); setInput(''); },
-          style: { ...btn('white', C.muted), border: `1px solid ${C.line}`, fontSize: 12, padding: '8px' }
-        }, 'Paste ID from another device')
-      : React.createElement('div', { style: { display: 'flex', gap: 8 } },
-          React.createElement('input', {
-            value: input, onChange: e => setInput(e.target.value),
-            placeholder: 'Paste Sync ID here…',
-            style: { flex: 1, padding: '8px 10px', borderRadius: 6, border: `1px solid ${C.line}`,
-              fontSize: 12, outline: 'none' }
-          }),
-          React.createElement('button', { onClick: apply,
-            style: { ...btn(C.ink, 'white'), flex: 'unset', padding: '8px 12px', fontSize: 12 }
-          }, 'Apply'),
-          React.createElement('button', { onClick: () => setEditing(false),
-            style: { ...btn('white', C.muted), border: `1px solid ${C.line}`, flex: 'unset', padding: '8px 12px', fontSize: 12 }
-          }, 'Cancel')
-        )
+
+    React.createElement('div', { style: { fontSize: 14, color: C.ink, fontWeight: 600, marginBottom: 8 } }, 'Your Sync ID'),
+    React.createElement('div', { style: { color: C.muted, fontSize: 13, marginBottom: 12, lineHeight: 1.6 } },
+      'This ID is your account. Copy it and paste it on your other devices to share the same words and progress.'),
+    React.createElement('div', {
+      style: { fontFamily: 'monospace', fontSize: 13, background: C.paperDark,
+        padding: '12px 14px', borderRadius: 8, wordBreak: 'break-all', color: C.ink, marginBottom: 8 }
+    }, userId),
+    React.createElement('button', { onClick: copy,
+      style: { ...btn(C.ink, 'white'), flex: 'unset', width: '100%', marginBottom: 28 }
+    }, copied ? '✓ Copied to clipboard' : 'Copy my Sync ID'),
+
+    React.createElement('div', { style: { height: 1, background: C.line, marginBottom: 24 } }),
+
+    React.createElement('div', { style: { fontSize: 14, color: C.ink, fontWeight: 600, marginBottom: 8 } }, 'Log in on this device'),
+    React.createElement('div', { style: { color: C.muted, fontSize: 13, marginBottom: 12, lineHeight: 1.6 } },
+      'Paste a Sync ID from another device to load its words and progress here.'),
+    React.createElement('input', {
+      value: input, onChange: e => setInput(e.target.value),
+      placeholder: 'Paste a Sync ID…',
+      style: { width: '100%', padding: '12px 14px', borderRadius: 8, border: `1px solid ${C.line}`,
+        fontSize: 13, fontFamily: 'monospace', outline: 'none', boxSizing: 'border-box', marginBottom: 10 }
+    }),
+    React.createElement('button', { onClick: apply, disabled: !input.trim(),
+      style: { ...btn(input.trim() ? C.ink : C.line, 'white'), flex: 'unset', width: '100%' }
+    }, 'Switch to this account')
   );
 }
 
-function StatsMode({ items, progress, onReset, onClearWords, onRemove, onAdd }) {
+// ── Add-list form — merge a new CSV/JSON into existing words ──────────────
+function AddListForm({ onMerge, onClose }) {
+  const [error, setError] = React.useState('');
+  const [loading, setLoading] = React.useState(false);
+  const [text, setText] = React.useState('');
+  const inputRef = React.useRef(null);
+
+  const process = raw => {
+    setLoading(true); setError('');
+    setTimeout(() => {
+      const parsed = parseLLN(raw);
+      setLoading(false);
+      if (!parsed) { setError("Couldn't read this — make sure it's a Language Reactor CSV or JSON export."); return; }
+      const added = onMerge(parsed);
+      onClose();
+      setTimeout(() => alert(`Added ${added} new word${added === 1 ? '' : 's'}.`), 100);
+    }, 50);
+  };
+
+  const onFileChange = e => {
+    const file = e.target.files[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => process(ev.target.result);
+    reader.onerror = () => setError("Couldn't read the file.");
+    reader.readAsText(file, 'utf-8');
+  };
+
+  return React.createElement('div', {
+    style: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 100,
+      display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }},
+    React.createElement('div', {
+      style: { background: C.paper, borderRadius: '16px 16px 0 0', padding: 24,
+        width: '100%', maxWidth: 480, maxHeight: '85vh', overflowY: 'auto' }},
+      React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 } },
+        React.createElement('div', { style: { fontSize: 17, fontWeight: 700, color: C.ink } }, 'Add a word list'),
+        React.createElement('button', { onClick: onClose, style: { background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: C.muted } }, '✕')
+      ),
+      React.createElement('div', { style: { fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 } },
+        'New words are added on top of your existing list. Duplicates are skipped.'),
+      React.createElement('input', { ref: inputRef, type: 'file', accept: '.json,.csv,.txt', onChange: onFileChange, style: { display: 'none' } }),
+      React.createElement('button', { onClick: () => inputRef.current && inputRef.current.click(), disabled: loading,
+        style: { width: '100%', padding: '16px', borderRadius: 12, border: `2px dashed ${C.line}`,
+          background: 'white', cursor: 'pointer', marginBottom: 14, boxSizing: 'border-box' }},
+        React.createElement('div', { style: { fontSize: 24, marginBottom: 4 } }, '📂'),
+        React.createElement('div', { style: { fontSize: 15, fontWeight: 700, color: C.ink } }, loading ? 'Loading…' : 'Choose file')
+      ),
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 } },
+        React.createElement('div', { style: { flex: 1, height: 1, background: C.line } }),
+        React.createElement('div', { style: { fontSize: 12, color: C.muted } }, 'or paste'),
+        React.createElement('div', { style: { flex: 1, height: 1, background: C.line } })
+      ),
+      React.createElement('textarea', { value: text, onChange: e => { setText(e.target.value); setError(''); },
+        placeholder: 'Paste CSV/JSON here…',
+        style: { width: '100%', height: 90, padding: 12, borderRadius: 8,
+          border: `2px solid ${error ? C.wrong : C.line}`, fontSize: 12, resize: 'vertical',
+          outline: 'none', boxSizing: 'border-box' } }),
+      error && React.createElement('div', { style: { color: C.wrong, fontSize: 12, marginTop: 6 } }, error),
+      text.trim() && React.createElement('button', { onClick: () => process(text), disabled: loading,
+        style: { ...btn(C.ink, 'white'), flex: 'unset', width: '100%', marginTop: 10 }
+      }, loading ? 'Loading…' : 'Add words')
+    )
+  );
+}
+
+function StatsMode({ items, progress, onReset, onClearWords, onRemove, onAdd, onMerge, onAccount }) {
   const [showAdd, setShowAdd] = useState(false);
+  const [showAddList, setShowAddList] = useState(false);
   const studied = items.filter(it=>(progress[it.id]?.correct||0)+(progress[it.id]?.wrong||0)>0).length;
   const mastered = items.filter(it=>(progress[it.id]?.correct||0)>=3).length;
 
   return (
     <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
       {showAdd && React.createElement(AddWordForm, { onAdd, onClose:()=>setShowAdd(false) })}
+      {showAddList && React.createElement(AddListForm, { onMerge, onClose:()=>setShowAddList(false) })}
       <div style={{ display:'flex', gap:10 }}>
         {[['Total',items.length,C.ink],['Studied',studied,C.gold],['Mastered',mastered,C.correct]].map(([l,v,c])=>
           React.createElement('div', { key:l, style:{ flex:1, textAlign:'center', padding:'12px 8px',
@@ -706,7 +762,10 @@ function StatsMode({ items, progress, onReset, onClearWords, onRemove, onAdd }) 
           )
         )}
       </div>
-      <button onClick={()=>setShowAdd(true)} style={{ ...btn(C.ink,'white'), flex:'unset' }}>+ Add word manually</button>
+      <div style={{ display:'flex', gap:10 }}>
+        <button onClick={()=>setShowAdd(true)} style={{ ...btn(C.ink,'white') }}>+ Add word</button>
+        <button onClick={()=>setShowAddList(true)} style={{ ...btn('white',C.ink), border:`2px solid ${C.ink}` }}>+ Add list</button>
+      </div>
       <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
         {[...items].sort((a,b)=>{
           const pa=progress[a.id]||{}, pb=progress[b.id]||{};
@@ -737,14 +796,14 @@ function StatsMode({ items, progress, onReset, onClearWords, onRemove, onAdd }) 
           );
         })}
       </div>
+      <button onClick={onAccount} style={{ ...btn('white',C.ink), border:`1px solid ${C.line}` }}>⚙ Account & sync</button>
       <button onClick={onReset} style={{ ...btn('white',C.wrong), border:`1px solid ${C.wrong}` }}>Reset progress</button>
       <button onClick={onClearWords} style={{ ...btn('white',C.muted), border:`1px solid ${C.line}` }}>Load a different word list</button>
-      <SyncPanel />
     </div>
   );
 }
 
-function ImportScreen({ onImport }) {
+function ImportScreen({ onImport, onAccount }) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [text, setText] = useState('');
@@ -805,6 +864,10 @@ function ImportScreen({ onImport }) {
         <strong>Export from Language Reactor:</strong><br/>
         Saved Words → ⋯ menu → Export → TSV/CSV
       </div>
+      <button onClick={onAccount}
+        style={{ ...btn('white',C.ink), border:`1px solid ${C.line}`, flex:'unset', width:'100%', marginTop:16 }}>
+        ⚙ Already have an account? Log in with Sync ID
+      </button>
     </div>
   );
 }
@@ -814,6 +877,7 @@ function App() {
   const [progress, setProgress] = useState({});
   const [mode, setMode] = useState('write');
   const [ready, setReady] = useState(false);
+  const [showAccount, setShowAccount] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -828,6 +892,20 @@ function App() {
   }, []);
 
   const handleImport = parsed => { setItems(parsed); storageSet(WORDS_KEY, parsed); };
+  const handleMerge = parsed => {
+    let added = 0;
+    setItems(prev => {
+      const existing = prev || [];
+      const existingIds = new Set(existing.map(it => it.id));
+      const existingWords = new Set(existing.map(it => it.word));
+      const newOnes = parsed.filter(it => !existingIds.has(it.id) && !existingWords.has(it.word));
+      added = newOnes.length;
+      const next = [...existing, ...newOnes];
+      storageSet(WORDS_KEY, next);
+      return next;
+    });
+    return added;
+  };
   const handleAnswer = (id, correct) => {
     setProgress(prev => {
       const e = prev[id]||{correct:0,wrong:0};
@@ -855,9 +933,13 @@ function App() {
     style:{ display:'flex', alignItems:'center', justifyContent:'center',
       height:'100vh', background:C.paper, color:C.muted, fontSize:14 }}, 'Loading…');
 
+  if (showAccount) return React.createElement('div', {
+    style:{ minHeight:'100vh', background:C.paper, paddingTop:20 }},
+    React.createElement(AccountScreen, { onClose:()=>setShowAccount(false) }));
+
   if (!items) return React.createElement('div', {
     style:{ minHeight:'100vh', background:C.paper, display:'flex', alignItems:'center' }},
-    React.createElement(ImportScreen, { onImport:handleImport }));
+    React.createElement(ImportScreen, { onImport:handleImport, onAccount:()=>setShowAccount(true) }));
 
   const sorted = [...items].sort((a,b)=>{
     const pa=progress[a.id]||{correct:0,wrong:0}, pb=progress[b.id]||{correct:0,wrong:0};
@@ -868,7 +950,7 @@ function App() {
     React.createElement('div', { style:{ background:C.ink, color:'white', padding:'12px 16px',
       display:'flex', alignItems:'center', justifyContent:'space-between' }},
       React.createElement('div', { style:{ fontSize:18, fontWeight:700 } }, '漢字 ',
-        React.createElement('span', { style:{ fontSize:12, opacity:0.6, fontWeight:400 } }, items.length+' words · v3')),
+        React.createElement('span', { style:{ fontSize:12, opacity:0.6, fontWeight:400 } }, items.length+' words · v4')),
       React.createElement('div', { style:{ display:'flex', gap:4 } },
         [['write','✏️'],['quiz','🎯'],['stats','📊']].map(([m,icon])=>
           React.createElement('button', { key:m, onClick:()=>setMode(m), style:{
@@ -881,7 +963,7 @@ function App() {
     React.createElement('div', { style:{ maxWidth:420, margin:'0 auto', padding:20 } },
       mode==='write' && React.createElement(WriteMode, { items:sorted, progress, onAnswer:handleAnswer, onRemove:handleRemove }),
       mode==='quiz' && React.createElement(QuizMode, { key:items.length, items:sorted, progress, onAnswer:handleAnswer, onRemove:handleRemove }),
-      mode==='stats' && React.createElement(StatsMode, { items, progress, onReset:resetProgress, onClearWords:clearWords, onRemove:handleRemove, onAdd:handleAdd })
+      mode==='stats' && React.createElement(StatsMode, { items, progress, onReset:resetProgress, onClearWords:clearWords, onRemove:handleRemove, onAdd:handleAdd, onMerge:handleMerge, onAccount:()=>setShowAccount(true) })
     )
   );
 }
