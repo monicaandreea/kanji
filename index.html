@@ -207,9 +207,20 @@ function localGet(key) {
 function localSet(key, val) {
   try { localStorage.setItem(key, JSON.stringify(val)); } catch {}
 }
+// Per-key last-write timestamps, so a stale remote read can't clobber a fresh local write
+function localTs(key) {
+  const t = parseInt(localStorage.getItem(key + ":ts") || "0", 10);
+  return Number.isFinite(t) ? t : 0;
+}
+function setLocalTs(key, ts) {
+  try { localStorage.setItem(key + ":ts", String(ts)); } catch {}
+}
+// Track in-flight remote writes so we don't read a stale value mid-flight
+const pendingWrites = {};
 
 // ── Supabase helpers ──────────────────────────────────────────────────────
 // Table: kanji_progress (user_id text, key text, value text, PRIMARY KEY (user_id, key))
+// value stores an envelope: { v: <data>, ts: <ms> }
 async function supabaseGet(key) {
   if (!SUPABASE_ENABLED) return null;
   try {
@@ -219,11 +230,17 @@ async function supabaseGet(key) {
       { headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` } }
     );
     const rows = await res.json();
-    return rows?.[0]?.value ? JSON.parse(rows[0].value) : null;
+    if (!rows?.[0]?.value) return null;
+    const parsed = JSON.parse(rows[0].value);
+    // Support both new envelope {v, ts} and legacy raw value
+    if (parsed && typeof parsed === 'object' && 'v' in parsed && 'ts' in parsed) {
+      return { value: parsed.v, ts: parsed.ts || 0 };
+    }
+    return { value: parsed, ts: 0 };
   } catch { return null; }
 }
 
-async function supabaseSet(key, val) {
+async function supabaseSet(key, val, ts) {
   if (!SUPABASE_ENABLED) return;
   try {
     const userId = getUserId();
@@ -235,21 +252,36 @@ async function supabaseSet(key, val) {
         "Content-Type": "application/json",
         Prefer: "resolution=merge-duplicates",
       },
-      body: JSON.stringify({ user_id: userId, key, value: JSON.stringify(val) }),
+      body: JSON.stringify({ user_id: userId, key, value: JSON.stringify({ v: val, ts }) }),
     });
   } catch {}
 }
 
-// ── Unified storage — writes to both, reads Supabase first ───────────────
+// ── Unified storage — local wins if its timestamp is newer than remote ───
 async function storageGet(key) {
+  // If a write for this key is still in flight, trust local immediately
+  if (pendingWrites[key]) return localGet(key);
   const remote = await supabaseGet(key);
-  if (remote !== null) { localSet(key, remote); return remote; }
-  return localGet(key); // fallback to local if offline
+  const localVal = localGet(key);
+  const localTime = localTs(key);
+  if (remote === null) return localVal; // nothing remote → use local
+  // Remote exists; only let it win if it's at least as new as our local write
+  if (remote.ts >= localTime) {
+    localSet(key, remote.value);
+    setLocalTs(key, remote.ts);
+    return remote.value;
+  }
+  // Local is newer (e.g. a write that hadn't synced yet) → keep local, push it up
+  supabaseSet(key, localVal, localTime);
+  return localVal;
 }
 
 async function storageSet(key, val) {
+  const ts = Date.now();
   localSet(key, val);          // write local immediately
-  supabaseSet(key, val);       // write remote in background
+  setLocalTs(key, ts);
+  pendingWrites[key] = true;
+  supabaseSet(key, val, ts).finally(() => { delete pendingWrites[key]; });
 }
 
 function parseLLN(raw) {
@@ -1469,6 +1501,14 @@ function App() {
       const next = { ...prev };
       delete next[id];
       storageSet(PROGRESS_KEY, next);
+      return next;
+    });
+    // Keep the word in the active set (re-add if it had dropped out)
+    setActiveIds(prev => {
+      const cur = prev || [];
+      if (cur.includes(id)) return cur;
+      const next = [...cur, id];
+      persistDeck(next);
       return next;
     });
   };
