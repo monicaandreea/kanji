@@ -778,7 +778,7 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
       // Quick actions (edit mode only)
       isEdit && React.createElement('div', { style:{ display:'flex', gap:8, marginBottom:18 } },
         React.createElement('button', {
-          onClick: () => { if (!isMastered) onMarkMastered(); },
+          onClick: () => { if (!isMastered && confirm(`Mark "${editItem.word}" as mastered?`)) onMarkMastered(); },
           disabled: isMastered,
           style:{ flex:1, padding:'9px 6px', borderRadius:8, border:`1px solid ${C.correct}`,
             background: isMastered ? C.softGreen : 'transparent', color:C.correct,
