@@ -157,11 +157,14 @@ const SUPABASE_URL = "https://scicjgxzbiptnjwsbyzv.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_xTSFjCF8rMaFSf-Xig_0uQ_6Ku-4NZt";
 const SUPABASE_ENABLED = SUPABASE_URL !== "YOUR_SUPABASE_URL";
 
-// ── User ID — random, persisted in localStorage ───────────────────────────
+// ── User ID — shown in settings so user can copy it to other devices ────
 function getUserId() {
   let id = localStorage.getItem("kanji-user-id");
   if (!id) { id = crypto.randomUUID(); localStorage.setItem("kanji-user-id", id); }
   return id;
+}
+function setUserId(id) {
+  localStorage.setItem("kanji-user-id", id.trim());
 }
 
 // ── Local storage helpers ─────────────────────────────────────────────────
@@ -601,6 +604,67 @@ function AddWordForm({ onAdd, onClose }) {
   );
 }
 
+function SyncPanel() {
+  const [userId, setUserIdState] = React.useState(getUserId());
+  const [editing, setEditing] = React.useState(false);
+  const [input, setInput] = React.useState('');
+  const [copied, setCopied] = React.useState(false);
+
+  const copy = () => {
+    navigator.clipboard.writeText(userId).then(() => {
+      setCopied(true); setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
+  const apply = () => {
+    if (!input.trim()) return;
+    setUserId(input.trim());
+    setUserIdState(input.trim());
+    setEditing(false);
+    setInput('');
+    alert('Sync ID updated! Reload the page to pull data from this ID.');
+  };
+
+  return React.createElement('div', {
+    style: { background: 'white', borderRadius: 8, border: `1px solid ${C.line}`,
+      padding: '14px 16px', fontSize: 13 }
+  },
+    React.createElement('div', { style: { fontWeight: 700, color: C.ink, marginBottom: 8 } }, '🔄 Cross-device sync'),
+    React.createElement('div', { style: { color: C.muted, fontSize: 12, marginBottom: 10, lineHeight: 1.5 } },
+      'To sync to another device, copy your Sync ID and paste it on the other device.'
+    ),
+    React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 } },
+      React.createElement('div', {
+        style: { flex: 1, fontFamily: 'monospace', fontSize: 11, background: C.paperDark,
+          padding: '8px 10px', borderRadius: 6, wordBreak: 'break-all', color: C.ink }
+      }, userId),
+      React.createElement('button', {
+        onClick: copy,
+        style: { ...btn(C.ink, 'white'), flex: 'unset', padding: '8px 14px', fontSize: 12 }
+      }, copied ? '✓ Copied' : 'Copy')
+    ),
+    !editing
+      ? React.createElement('button', {
+          onClick: () => { setEditing(true); setInput(''); },
+          style: { ...btn('white', C.muted), border: `1px solid ${C.line}`, fontSize: 12, padding: '8px' }
+        }, 'Paste ID from another device')
+      : React.createElement('div', { style: { display: 'flex', gap: 8 } },
+          React.createElement('input', {
+            value: input, onChange: e => setInput(e.target.value),
+            placeholder: 'Paste Sync ID here…',
+            style: { flex: 1, padding: '8px 10px', borderRadius: 6, border: `1px solid ${C.line}`,
+              fontSize: 12, outline: 'none' }
+          }),
+          React.createElement('button', { onClick: apply,
+            style: { ...btn(C.ink, 'white'), flex: 'unset', padding: '8px 12px', fontSize: 12 }
+          }, 'Apply'),
+          React.createElement('button', { onClick: () => setEditing(false),
+            style: { ...btn('white', C.muted), border: `1px solid ${C.line}`, flex: 'unset', padding: '8px 12px', fontSize: 12 }
+          }, 'Cancel')
+        )
+  );
+}
+
 function StatsMode({ items, progress, onReset, onClearWords, onRemove, onAdd }) {
   const [showAdd, setShowAdd] = useState(false);
   const studied = items.filter(it=>(progress[it.id]?.correct||0)+(progress[it.id]?.wrong||0)>0).length;
@@ -651,6 +715,7 @@ function StatsMode({ items, progress, onReset, onClearWords, onRemove, onAdd }) 
       </div>
       <button onClick={onReset} style={{ ...btn('white',C.wrong), border:`1px solid ${C.wrong}` }}>Reset progress</button>
       <button onClick={onClearWords} style={{ ...btn('white',C.muted), border:`1px solid ${C.line}` }}>Load a different word list</button>
+      <SyncPanel />
     </div>
   );
 }
