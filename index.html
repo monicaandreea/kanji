@@ -266,13 +266,32 @@ let kuroshiroInstance = null;
 let kuroshiroReady = false;
 let kuroshiroQueue = [];
 
+function resolveClass(g) {
+  // UMD bundles may expose the class directly, or as { default: Class },
+  // or even { default: { default: Class } }. Unwrap until we hit a function.
+  let c = g;
+  let guard = 0;
+  while (c && typeof c !== 'function' && c.default && guard < 5) { c = c.default; guard++; }
+  return c;
+}
+
 function initKuroshiro(cb) {
   if (kuroshiroReady) { cb(kuroshiroInstance); return; }
   kuroshiroQueue.push(cb);
   if (window._kuroshiroLoading) return;
   window._kuroshiroLoading = true;
-  const KClass = (typeof Kuroshiro !== 'undefined' && Kuroshiro.default) ? Kuroshiro.default : Kuroshiro;
-  const AClass = (typeof KuromojiAnalyzer !== 'undefined' && KuromojiAnalyzer.default) ? KuromojiAnalyzer.default : KuromojiAnalyzer;
+
+  const KClass = resolveClass(window.Kuroshiro);
+  const AClass = resolveClass(window.KuromojiAnalyzer);
+
+  if (typeof KClass !== 'function' || typeof AClass !== 'function') {
+    console.error('Kuroshiro classes not found', { KClass, AClass });
+    window._kuroshiroLoading = false;
+    kuroshiroQueue.forEach(fn => fn(null));
+    kuroshiroQueue = [];
+    return;
+  }
+
   const k = new KClass();
   k.init(new AClass({ dictPath: 'https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/dict/' }))
     .then(() => {
@@ -280,7 +299,12 @@ function initKuroshiro(cb) {
       kuroshiroReady = true;
       kuroshiroQueue.forEach(fn => fn(k));
       kuroshiroQueue = [];
-    }).catch(e => console.error('Kuroshiro init failed:', e));
+    }).catch(e => {
+      console.error('Kuroshiro init failed:', e);
+      window._kuroshiroLoading = false;
+      kuroshiroQueue.forEach(fn => fn(null));
+      kuroshiroQueue = [];
+    });
 }
 
 const furiganaCache = {};
@@ -844,7 +868,7 @@ function App() {
     React.createElement('div', { style:{ background:C.ink, color:'white', padding:'12px 16px',
       display:'flex', alignItems:'center', justifyContent:'space-between' }},
       React.createElement('div', { style:{ fontSize:18, fontWeight:700 } }, '漢字 ',
-        React.createElement('span', { style:{ fontSize:12, opacity:0.6, fontWeight:400 } }, items.length+' words')),
+        React.createElement('span', { style:{ fontSize:12, opacity:0.6, fontWeight:400 } }, items.length+' words · v2')),
       React.createElement('div', { style:{ display:'flex', gap:4 } },
         [['write','✏️'],['quiz','🎯'],['stats','📊']].map(([m,icon])=>
           React.createElement('button', { key:m, onClick:()=>setMode(m), style:{
