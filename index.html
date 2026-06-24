@@ -443,7 +443,7 @@ function btn(bg, color, extra) {
     background: bg, color, fontSize: 14, cursor: 'pointer', fontWeight: 600, ...(extra||{}) };
 }
 
-function WriteMode({ items, progress, onAnswer, onRemove }) {
+function WriteMode({ items, progress, onAnswer, onCurrentWord }) {
   const [idx, setIdx] = useState(0);
   const [phase, setPhase] = useState('write');
   const [clearTrigger, setClearTrigger] = useState(0);
@@ -452,6 +452,8 @@ function WriteMode({ items, progress, onAnswer, onRemove }) {
   const item = items[safeIdx];
   const p = progress[item.id] || { correct: 0, wrong: 0 };
 
+  React.useEffect(() => { onCurrentWord && onCurrentWord(item.id); }, [item.id]);
+
   const reveal = () => setPhase('reveal');
   const clear = () => setClearTrigger(t => t + 1);
   const grade = (correct) => {
@@ -459,12 +461,6 @@ function WriteMode({ items, progress, onAnswer, onRemove }) {
     setClearTrigger(t => t + 1);
     setPhase('write');
     setIdx(i => (i + 1) % items.length);
-  };
-  const remove = () => {
-    onRemove(item.id);
-    setClearTrigger(t => t + 1);
-    setPhase('write');
-    setIdx(i => Math.min(i, items.length - 2));
   };
 
   return (
@@ -495,7 +491,6 @@ function WriteMode({ items, progress, onAnswer, onRemove }) {
         <div style={{ display:'flex', gap:10, width:'100%' }}>
           <button onClick={clear} style={btn(C.line, C.ink)}>Clear</button>
           <button onClick={reveal} style={{ ...btn(C.ink,'white'), flex:2 }}>Reveal</button>
-          <button onClick={remove} style={btn(C.paperDark, C.muted)}>✕</button>
         </div>
       ) : (
         <div style={{ display:'flex', gap:10, width:'100%' }}>
@@ -507,7 +502,7 @@ function WriteMode({ items, progress, onAnswer, onRemove }) {
   );
 }
 
-function QuizMode({ items, progress, onAnswer, onRemove }) {
+function QuizMode({ items, progress, onAnswer, onCurrentWord }) {
   const snapshotRef = useRef(null);
   useEffect(() => { snapshotRef.current = [...items]; }, []);
 
@@ -521,6 +516,8 @@ function QuizMode({ items, progress, onAnswer, onRemove }) {
   const p = progress[item.id] || { correct:0, wrong:0 };
   const revealed = picked !== null;
   const correct = item.meanings[0];
+
+  React.useEffect(() => { onCurrentWord && onCurrentWord(item.id); }, [item.id]);
 
   useEffect(() => {
     const card = snapshot[idx]; if (!card) return;
@@ -542,22 +539,12 @@ function QuizMode({ items, progress, onAnswer, onRemove }) {
     setIdx(i => (i+1) % snapshot.length);
   };
 
-  const remove = () => {
-    onRemove(item.id);
-    snapshotRef.current = snapshot.filter(it => it.id !== item.id);
-    setIdx(i => Math.min(i, snapshotRef.current.length-1));
-    setPicked(null); answeredRef.current = false;
-  };
-
   return (
     <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
       <div style={{ textAlign:'center', minHeight:90 }}>
         <div style={{ fontSize:64, fontWeight:700, letterSpacing:4, color:C.ink, lineHeight:1 }}>{item.word}</div>
         {revealed && <div style={{ fontSize:15, color:C.muted, marginTop:4 }}><KanaReading word={item.word} fallback={item.reading} /></div>}
-        <div style={{ fontSize:11, color:C.muted, marginTop:4 }}>✓ {p.correct} · ✗ {p.wrong}
-          <button onClick={remove} style={{ marginLeft:10, background:'none', border:'none',
-            color:C.muted, cursor:'pointer', fontSize:11, padding:'0 4px' }}>✕ remove</button>
-        </div>
+        <div style={{ fontSize:11, color:C.muted, marginTop:4 }}>✓ {p.correct} · ✗ {p.wrong}</div>
       </div>
       <div style={{ minHeight:60, background:C.paperDark, borderRadius:8, padding:'12px 16px' }}>
         {item.sentence
@@ -598,6 +585,17 @@ function QuizMode({ items, progress, onAnswer, onRemove }) {
   );
 }
 
+// Defined at module scope so it isn't recreated each render (which drops input focus)
+function FormField({ label, value, setter, placeholder, hint, clearError }) {
+  return React.createElement('div', { style:{ marginBottom:14 } },
+    React.createElement('div', { style:{ fontSize:12, fontWeight:600, color:C.ink, marginBottom:4 } }, label),
+    React.createElement('input', { value, onChange:e=>{ setter(e.target.value); clearError && clearError(); },
+      placeholder, style:{ width:'100%', padding:'10px 12px', borderRadius:8,
+        border:`1px solid ${C.line}`, fontSize:16, outline:'none', background:'white', boxSizing:'border-box' } }),
+    hint && React.createElement('div', { style:{ fontSize:11, color:C.muted, marginTop:3 } }, hint)
+  );
+}
+
 function AddWordForm({ onAdd, onClose }) {
   const [word, setWord] = useState('');
   const [reading, setReading] = useState('');
@@ -615,14 +613,7 @@ function AddWordForm({ onAdd, onClose }) {
     onClose();
   };
 
-  const Field = ({ label, value, setter, placeholder, hint }) =>
-    React.createElement('div', { style:{ marginBottom:14 } },
-      React.createElement('div', { style:{ fontSize:12, fontWeight:600, color:C.ink, marginBottom:4 } }, label),
-      React.createElement('input', { value, onChange:e=>{ setter(e.target.value); setError(''); },
-        placeholder, style:{ width:'100%', padding:'10px 12px', borderRadius:8,
-          border:`1px solid ${C.line}`, fontSize:14, outline:'none', background:'white' } }),
-      hint && React.createElement('div', { style:{ fontSize:11, color:C.muted, marginTop:3 } }, hint)
-    );
+  const clearError = () => setError('');
 
   return React.createElement('div', {
     style:{ position:'fixed', inset:0, background:'rgba(0,0,0,0.4)', zIndex:100,
@@ -634,11 +625,11 @@ function AddWordForm({ onAdd, onClose }) {
         React.createElement('div', { style:{ fontSize:17, fontWeight:700, color:C.ink } }, 'Add word'),
         React.createElement('button', { onClick:onClose, style:{ background:'none', border:'none', fontSize:20, cursor:'pointer', color:C.muted } }, '✕')
       ),
-      React.createElement(Field, { label:'Word *', value:word, setter:setWord, placeholder:'失敗' }),
-      React.createElement(Field, { label:'Reading', value:reading, setter:setReading, placeholder:'シッパイ', hint:'Kana reading (optional)' }),
-      React.createElement(Field, { label:'Meanings *', value:meanings, setter:setMeanings, placeholder:'failure, mistake', hint:'Comma-separated' }),
-      React.createElement(Field, { label:'Example sentence', value:sentence, setter:setSentence, placeholder:'彼は失敗した。' }),
-      React.createElement(Field, { label:'Translation', value:sentenceEn, setter:setSentenceEn, placeholder:'He failed.' }),
+      React.createElement(FormField, { key:'w', label:'Word *', value:word, setter:setWord, placeholder:'失敗', clearError }),
+      React.createElement(FormField, { key:'r', label:'Reading', value:reading, setter:setReading, placeholder:'シッパイ', hint:'Kana reading (optional)', clearError }),
+      React.createElement(FormField, { key:'m', label:'Meanings *', value:meanings, setter:setMeanings, placeholder:'failure, mistake', hint:'Comma-separated', clearError }),
+      React.createElement(FormField, { key:'s', label:'Example sentence', value:sentence, setter:setSentence, placeholder:'彼は失敗した。', clearError }),
+      React.createElement(FormField, { key:'t', label:'Translation', value:sentenceEn, setter:setSentenceEn, placeholder:'He failed.', clearError }),
       error && React.createElement('div', { style:{ color:C.wrong, fontSize:12, marginBottom:12 } }, error),
       React.createElement('div', { style:{ display:'flex', gap:10 } },
         React.createElement('button', { onClick:onClose, style:btn(C.line, C.ink) }, 'Cancel'),
@@ -1028,6 +1019,7 @@ function App() {
   // Active deck: ordered list of word IDs for this session (sticky, persisted)
   const [activeIds, setActiveIds] = useState(null);
   const [deckLoaded, setDeckLoaded] = useState(false);
+  const currentWordRef = useRef(null);
 
   useEffect(() => {
     (async () => {
@@ -1225,19 +1217,22 @@ function App() {
       // Session controls bar (only on practice tabs)
       (mode==='write' || mode==='quiz') && React.createElement('div', {
         style:{ display:'flex', alignItems:'center', justifyContent:'space-between',
-          marginBottom:16, fontSize:12, color:C.muted }},
-        React.createElement('span', null,
+          marginBottom:16, fontSize:12, color:C.muted, gap:8 }},
+        React.createElement('span', { style:{ flex:1 } },
           allMastered ? 'All words mastered! Reviewing all.' : `${masteredCount} of ${items.length} mastered`),
+        React.createElement('button', { onClick:()=>{ const id=currentWordRef.current; if(id){ const w=idToItem[id]; if(w && confirm(`Delete "${w.word}"?`)) handleRemove(id); } },
+          style:{ background:'white', border:`1px solid ${C.line}`, borderRadius:6,
+            padding:'5px 10px', fontSize:12, cursor:'pointer', color:C.wrong, flexShrink:0 } }, 'Delete word'),
         React.createElement('button', { onClick:()=>{ if(confirm('Shuffle in a new set of words? Your current active set will be replaced (progress is kept).')) reshuffle(); },
           style:{ background:'white', border:`1px solid ${C.line}`, borderRadius:6,
-            padding:'5px 10px', fontSize:12, cursor:'pointer', color:C.ink } }, 'New set')
+            padding:'5px 10px', fontSize:12, cursor:'pointer', color:C.ink, flexShrink:0 } }, 'New set')
       ),
       mode==='write' && (deckEmpty
         ? React.createElement('div', { style:{ textAlign:'center', color:C.muted, padding:'40px 20px' } }, 'No active words. Add some in the Words tab.')
-        : React.createElement(WriteMode, { key:deck.length, items:deck, progress, onAnswer:handleAnswer, onRemove:handleRemove })),
+        : React.createElement(WriteMode, { key:deck.length, items:deck, progress, onAnswer:handleAnswer, onCurrentWord:(id)=>{currentWordRef.current=id;} })),
       mode==='quiz' && (deckEmpty
         ? React.createElement('div', { style:{ textAlign:'center', color:C.muted, padding:'40px 20px' } }, 'No active words. Add some in the Words tab.')
-        : React.createElement(QuizMode, { key:deck.length, items:deck, progress, onAnswer:handleAnswer, onRemove:handleRemove })),
+        : React.createElement(QuizMode, { key:deck.length, items:deck, progress, onAnswer:handleAnswer, onCurrentWord:(id)=>{currentWordRef.current=id;} })),
       mode==='words' && React.createElement(WordsMode, { items, progress, onRemove:handleRemove, onAdd:handleAdd, onMerge:handleMerge, onResetWord:resetWord, activeIds:activeIds||[], onAddToActive:addToActive, onRemoveFromActive:removeFromActive, masteryTarget })
     )
   );
