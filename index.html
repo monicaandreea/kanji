@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="漢字">
+<title>漢字 Practice</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #f7f4ee; font-family: 'Segoe UI', system-ui, sans-serif; min-height: 100vh; }
+  ruby rt { font-size: 0.55em; color: #b8860b; }
+  button { font-family: inherit; }
+  textarea, input { font-family: inherit; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+
+const C = {
+  ink: "#1a1a2e", paper: "#f7f4ee", paperDark: "#ede9e0",
+  muted: "#8a8478", line: "#d4cfc4", correct: "#2d6a4f",
+  wrong: "#c0392b", gold: "#b8860b",
+};
+
+const PROGRESS_KEY = "kanji-progress-v1";
+const WORDS_KEY = "kanji-words-v1";
+
+// ── Config — fill these in after Supabase setup ──────────────────────────
+const SUPABASE_URL = "https://scicjgxzbiptnjwsbyzv.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_xTSFjCF8rMaFSf-Xig_0uQ_6Ku-4NZt";
+const SUPABASE_ENABLED = SUPABASE_URL !== "YOUR_SUPABASE_URL";
+
+// ── User ID — random, persisted in localStorage ───────────────────────────
+function getUserId() {
+  let id = localStorage.getItem("kanji-user-id");
+  if (!id) { id = crypto.randomUUID(); localStorage.setItem("kanji-user-id", id); }
+  return id;
+}
+
+// ── Local storage helpers ─────────────────────────────────────────────────
+function localGet(key) {
+  try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : null; }
+  catch { return null; }
+}
+function localSet(key, val) {
+  try { localStorage.setItem(key, JSON.stringify(val)); } catch {}
+}
+
+// ── Supabase helpers ──────────────────────────────────────────────────────
+// Table: kanji_progress (user_id text, key text, value text, PRIMARY KEY (user_id, key))
+async function supabaseGet(key) {
+  if (!SUPABASE_ENABLED) return null;
+  try {
+    const userId = getUserId();
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/kanji_progress?user_id=eq.${userId}&key=eq.${key}&select=value`,
+      { headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` } }
+    );
+    const rows = await res.json();
+    return rows?.[0]?.value ? JSON.parse(rows[0].value) : null;
+  } catch { return null; }
+}
+
+async function supabaseSet(key, val) {
+  if (!SUPABASE_ENABLED) return;
+  try {
+    const userId = getUserId();
+    await fetch(`${SUPABASE_URL}/rest/v1/kanji_progress`, {
+      method: "POST",
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        "Content-Type": "application/json",
+        Prefer: "resolution=merge-duplicates",
+      },
+      body: JSON.stringify({ user_id: userId, key, value: JSON.stringify(val) }),
+    });
+  } catch {}
+}
+
+// ── Unified storage — writes to both, reads Supabase first ───────────────
+async function storageGet(key) {
+  const remote = await supabaseGet(key);
+  if (remote !== null) { localSet(key, remote); return remote; }
+  return localGet(key); // fallback to local if offline
+}
+
+async function storageSet(key, val) {
+  localSet(key, val);          // write local immediately
+  supabaseSet(key, val);       // write remote in background
+}
+
+function parseLLN(raw) {
+  try {
+    if (raw.includes("WORD|") && raw.includes("\t")) {
+      const entries = raw.split(/\nWORD\|/);
+      if (entries[0].startsWith("WORD|")) entries[0] = entries[0].slice(5);
+      else entries[0] = entries[0].replace(/^WORD\|/, "");
+      const out = entries.map(entry => {
+        const fields = entry.split("\t");
+        const keyPart = fields[0] || "";
+        const word = (fields[4] || "").trim();
+        if (!word) return null;
+        const meaningsRaw = (fields[8] || "").replace(/^"|"$/g, "").trim();
+        const meanings = meaningsRaw.split(",").map(m => m.trim()).filter(Boolean);
+        const sentence = (fields[2] || "").trim() || null;
+        const sentenceEn = (fields[3] || "").trim() || null;
+        const reading = (fields[12] || "").trim();
+        return { id: "WORD|" + keyPart, word, reading, meanings, sentence, sentenceEn };
+      }).filter(Boolean);
+      return out.length > 0 ? out : null;
+    }
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return null;
+    const out = arr.filter(item => item.word && item.word.text).map(item => {
+      const phrase = item.context && item.context.phrase;
+      const subtitles = (phrase && phrase.subtitles) || {};
+      const hTrans = (phrase && phrase.hTranslations) || {};
+      const sentence = Object.values(subtitles).find(s => s) || null;
+      const sentenceEn = Object.values(hTrans).find(s => s) || null;
+      return {
+        id: item.key || item.word.text,
+        word: item.word.text,
+        reading: item.word.translit || "",
+        meanings: item.wordTranslationsArr || [],
+        sentence, sentenceEn,
+      };
+    });
+    return out.length > 0 ? out : null;
+  } catch(e) { return null; }
+}
+
+function SentenceDisplay({ sentence, sentenceEn, word, reading, showEn }) {
+  if (!sentence) return null;
+  // Highlight target word in bold, plain text otherwise (no API needed)
+  const parts = sentence.split(word);
+  return React.createElement('div', { style: { fontSize: 14, lineHeight: 2, color: C.ink } },
+    React.createElement('div', null,
+      parts.map((part, i) => React.createElement(React.Fragment, { key: i },
+        part,
+        i < parts.length - 1 && React.createElement('span', { style: { fontWeight: 700 } }, word)
+      ))
+    ),
+    showEn && sentenceEn && React.createElement('div', {
+      style: { color: C.muted, fontSize: 12, marginTop: 4, lineHeight: 1.5 }
+    }, sentenceEn)
+  );
+}
+
+function StrokeOrder({ word }) {
+  return React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' } },
+    [...word].map((char, i) => {
+      const cp = char.codePointAt(0).toString(16).padStart(5, '0');
+      const url = `https://raw.githubusercontent.com/KanjiVG/kanjivg/master/kanji/${cp}.svg`;
+      return React.createElement('img', {
+        key: i, src: url, width: 80, height: 80, alt: char,
+        style: { border: `1px solid ${C.line}`, borderRadius: 6, background: 'white', display: 'block' },
+        onError: e => { e.target.style.display = 'none'; }
+      });
+    })
+  );
+}
+
+function DrawCanvas({ clearTrigger }) {
+  const canvasRef = useRef(null);
+  const drawing = useRef(false);
+  const lastPos = useRef(null);
+
+  const getPos = (e, canvas) => {
+    const rect = canvas.getBoundingClientRect();
+    const src = e.touches ? e.touches[0] : e;
+    return {
+      x: (src.clientX - rect.left) * (canvas.width / rect.width),
+      y: (src.clientY - rect.top) * (canvas.height / rect.height),
+    };
+  };
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = C.line; ctx.lineWidth = 0.5; ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(canvas.width/2, 0); ctx.lineTo(canvas.width/2, canvas.height);
+    ctx.moveTo(0, canvas.height/2); ctx.lineTo(canvas.width, canvas.height/2);
+    ctx.stroke(); ctx.setLineDash([]);
+  }, [clearTrigger]);
+
+  const startDraw = e => {
+    e.preventDefault(); drawing.current = true;
+    const canvas = canvasRef.current;
+    const pos = getPos(e, canvas); lastPos.current = pos;
+    const ctx = canvas.getContext('2d');
+    ctx.beginPath(); ctx.arc(pos.x, pos.y, 2, 0, Math.PI*2);
+    ctx.fillStyle = C.ink; ctx.fill();
+  };
+  const draw = e => {
+    e.preventDefault(); if (!drawing.current) return;
+    const canvas = canvasRef.current; const ctx = canvas.getContext('2d');
+    const pos = getPos(e, canvas);
+    ctx.beginPath(); ctx.moveTo(lastPos.current.x, lastPos.current.y);
+    ctx.lineTo(pos.x, pos.y); ctx.strokeStyle = C.ink;
+    ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.stroke(); lastPos.current = pos;
+  };
+  const stopDraw = () => { drawing.current = false; };
+
+  return React.createElement('canvas', {
+    ref: canvasRef, width: 280, height: 280,
+    style: { border: `2px solid ${C.line}`, borderRadius: 8, background: 'white',
+      cursor: 'crosshair', touchAction: 'none', width: '100%', maxWidth: 280 },
+    onMouseDown: startDraw, onMouseMove: draw, onMouseUp: stopDraw, onMouseLeave: stopDraw,
+    onTouchStart: startDraw, onTouchMove: draw, onTouchEnd: stopDraw,
+  });
+}
+
+function btn(bg, color, extra) {
+  return { flex: 1, padding: '13px 8px', borderRadius: 8, border: `2px solid ${bg}`,
+    background: bg, color, fontSize: 14, cursor: 'pointer', fontWeight: 600, ...(extra||{}) };
+}
+
+function WriteMode({ items, progress, onAnswer, onRemove }) {
+  const [idx, setIdx] = useState(0);
+  const [phase, setPhase] = useState('write');
+  const [clearTrigger, setClearTrigger] = useState(0);
+
+  const safeIdx = Math.min(idx, items.length - 1);
+  const item = items[safeIdx];
+  const p = progress[item.id] || { correct: 0, wrong: 0 };
+
+  const reveal = () => setPhase('reveal');
+  const clear = () => setClearTrigger(t => t + 1);
+  const grade = (correct) => {
+    onAnswer(item.id, correct);
+    setClearTrigger(t => t + 1);
+    setPhase('write');
+    setIdx(i => (i + 1) % items.length);
+  };
+  const remove = () => {
+    onRemove(item.id);
+    setClearTrigger(t => t + 1);
+    setPhase('write');
+    setIdx(i => Math.min(i, items.length - 2));
+  };
+
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:16, alignItems:'center' }}>
+      <div style={{ textAlign:'center', width:'100%' }}>
+        <div style={{ fontSize:12, color:C.muted, textTransform:'uppercase', letterSpacing:2, marginBottom:6 }}>Write this word</div>
+        <div style={{ fontSize:30, fontWeight:700, color:C.ink }}>{item.meanings.slice(0,2).join(' · ')}</div>
+        <div style={{ fontSize:11, color:C.muted, marginTop:4 }}>✓ {p.correct} · ✗ {p.wrong}</div>
+      </div>
+      <DrawCanvas clearTrigger={clearTrigger} />
+      {phase === 'reveal' && (
+        <div style={{ width:'100%' }}>
+          <div style={{ textAlign:'center', marginBottom:8 }}>
+            <div style={{ fontSize:13, color:C.muted, marginBottom:4 }}>
+              {item.word} · <span style={{ fontFamily:'monospace' }}>{item.reading}</span>
+            </div>
+            <StrokeOrder word={item.word} />
+          </div>
+          {item.sentence && (
+            <div style={{ background:C.paperDark, borderRadius:8, padding:'12px 14px', width:'100%' }}>
+              <SentenceDisplay sentence={item.sentence} sentenceEn={item.sentenceEn}
+                word={item.word} reading={item.reading} showEn={true} />
+            </div>
+          )}
+        </div>
+      )}
+      {phase === 'write' ? (
+        <div style={{ display:'flex', gap:10, width:'100%' }}>
+          <button onClick={clear} style={btn(C.line, C.ink)}>Clear</button>
+          <button onClick={reveal} style={{ ...btn(C.ink,'white'), flex:2 }}>Reveal</button>
+          <button onClick={remove} style={btn(C.paperDark, C.muted)}>✕</button>
+        </div>
+      ) : (
+        <div style={{ display:'flex', gap:10, width:'100%' }}>
+          <button onClick={() => grade(false)} style={btn(C.wrong,'white')}>✗ Wrong</button>
+          <button onClick={() => grade(true)} style={btn(C.correct,'white')}>✓ Correct</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function QuizMode({ items, progress, onAnswer, onRemove }) {
+  const snapshotRef = useRef(null);
+  useEffect(() => { snapshotRef.current = [...items]; }, []);
+
+  const [idx, setIdx] = useState(0);
+  const [choices, setChoices] = useState([]);
+  const [picked, setPicked] = useState(null);
+  const answeredRef = useRef(false);
+
+  const snapshot = snapshotRef.current || items;
+  const item = snapshot[Math.min(idx, snapshot.length-1)] || snapshot[0];
+  const p = progress[item.id] || { correct:0, wrong:0 };
+  const revealed = picked !== null;
+  const correct = item.meanings[0];
+
+  useEffect(() => {
+    const card = snapshot[idx]; if (!card) return;
+    const others = snapshot.filter((_,i)=>i!==idx).sort(()=>Math.random()-0.5).slice(0,3).map(it=>it.meanings[0]);
+    setChoices([...others, card.meanings[0]].sort(()=>Math.random()-0.5));
+    setPicked(null); answeredRef.current = false;
+  }, [idx]);
+
+  const answer = (e, choice) => {
+    e.preventDefault(); e.stopPropagation();
+    if (answeredRef.current) return;
+    answeredRef.current = true;
+    setPicked(choice);
+    onAnswer(item.id, choice === correct);
+  };
+
+  const next = e => {
+    e.preventDefault(); e.stopPropagation();
+    setIdx(i => (i+1) % snapshot.length);
+  };
+
+  const remove = () => {
+    onRemove(item.id);
+    snapshotRef.current = snapshot.filter(it => it.id !== item.id);
+    setIdx(i => Math.min(i, snapshotRef.current.length-1));
+    setPicked(null); answeredRef.current = false;
+  };
+
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+      <div style={{ textAlign:'center', minHeight:90 }}>
+        <div style={{ fontSize:64, fontWeight:700, letterSpacing:4, color:C.ink, lineHeight:1 }}>{item.word}</div>
+        {revealed && <div style={{ fontSize:15, color:C.muted, marginTop:4, fontFamily:'monospace' }}>{item.reading}</div>}
+        <div style={{ fontSize:11, color:C.muted, marginTop:4 }}>✓ {p.correct} · ✗ {p.wrong}
+          <button onClick={remove} style={{ marginLeft:10, background:'none', border:'none',
+            color:C.muted, cursor:'pointer', fontSize:11, padding:'0 4px' }}>✕ remove</button>
+        </div>
+      </div>
+      <div style={{ minHeight:60, background:C.paperDark, borderRadius:8, padding:'12px 16px' }}>
+        {item.sentence
+          ? React.createElement(SentenceDisplay, { sentence:item.sentence, sentenceEn:item.sentenceEn,
+              word:item.word, reading:item.reading, showEn:revealed })
+          : React.createElement('span', { style:{ color:C.muted, fontSize:12 } }, 'No example sentence')}
+      </div>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+        {choices.map(choice => {
+          const isCorrect = choice === correct, isPicked = choice === picked;
+          let bg='white', border=C.line, color=C.ink;
+          if (revealed) {
+            if (isCorrect) { bg='#e8f5e9'; border=C.correct; color=C.correct; }
+            else if (isPicked) { bg='#fdecea'; border=C.wrong; color=C.wrong; }
+          }
+          return React.createElement('button', {
+            key: choice,
+            onPointerDown: e => answer(e, choice),
+            style: { padding:'14px 8px', borderRadius:8, border:`2px solid ${border}`,
+              background:bg, color, fontSize:14, fontWeight:revealed&&isCorrect?700:400,
+              cursor:revealed?'default':'pointer', transition:'background 0.15s, border-color 0.15s',
+              WebkitTapHighlightColor:'transparent', userSelect:'none' }
+          }, choice + (revealed&&isCorrect?' ✓':'') + (revealed&&isPicked&&!isCorrect?' ✗':''));
+        })}
+      </div>
+      <div style={{ minHeight:52 }}>
+        {revealed
+          ? React.createElement('button', {
+              onPointerDown: next,
+              style: { width:'100%', padding:'14px', borderRadius:8, border:'none',
+                background: picked===correct?C.correct:C.wrong,
+                color:'white', fontSize:15, fontWeight:700, cursor:'pointer',
+                WebkitTapHighlightColor:'transparent' }
+            }, picked===correct ? 'Correct! → Next' : `Answer: ${correct} → Next`)
+          : React.createElement('div', { style:{ height:52 } })}
+      </div>
+    </div>
+  );
+}
+
+function AddWordForm({ onAdd, onClose }) {
+  const [word, setWord] = useState('');
+  const [reading, setReading] = useState('');
+  const [meanings, setMeanings] = useState('');
+  const [sentence, setSentence] = useState('');
+  const [sentenceEn, setSentenceEn] = useState('');
+  const [error, setError] = useState('');
+
+  const submit = () => {
+    if (!word.trim()) { setError('Word is required'); return; }
+    if (!meanings.trim()) { setError('At least one meaning is required'); return; }
+    onAdd({ id:`manual-${word.trim()}-${Date.now()}`, word:word.trim(), reading:reading.trim(),
+      meanings:meanings.split(',').map(m=>m.trim()).filter(Boolean),
+      sentence:sentence.trim()||null, sentenceEn:sentenceEn.trim()||null });
+    onClose();
+  };
+
+  const Field = ({ label, value, setter, placeholder, hint }) =>
+    React.createElement('div', { style:{ marginBottom:14 } },
+      React.createElement('div', { style:{ fontSize:12, fontWeight:600, color:C.ink, marginBottom:4 } }, label),
+      React.createElement('input', { value, onChange:e=>{ setter(e.target.value); setError(''); },
+        placeholder, style:{ width:'100%', padding:'10px 12px', borderRadius:8,
+          border:`1px solid ${C.line}`, fontSize:14, outline:'none', background:'white' } }),
+      hint && React.createElement('div', { style:{ fontSize:11, color:C.muted, marginTop:3 } }, hint)
+    );
+
+  return React.createElement('div', {
+    style:{ position:'fixed', inset:0, background:'rgba(0,0,0,0.4)', zIndex:100,
+      display:'flex', alignItems:'flex-end', justifyContent:'center' }},
+    React.createElement('div', {
+      style:{ background:C.paper, borderRadius:'16px 16px 0 0', padding:24,
+        width:'100%', maxWidth:480, maxHeight:'85vh', overflowY:'auto' }},
+      React.createElement('div', { style:{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20 } },
+        React.createElement('div', { style:{ fontSize:17, fontWeight:700, color:C.ink } }, 'Add word'),
+        React.createElement('button', { onClick:onClose, style:{ background:'none', border:'none', fontSize:20, cursor:'pointer', color:C.muted } }, '✕')
+      ),
+      React.createElement(Field, { label:'Word *', value:word, setter:setWord, placeholder:'失敗' }),
+      React.createElement(Field, { label:'Reading', value:reading, setter:setReading, placeholder:'シッパイ', hint:'Kana reading (optional)' }),
+      React.createElement(Field, { label:'Meanings *', value:meanings, setter:setMeanings, placeholder:'failure, mistake', hint:'Comma-separated' }),
+      React.createElement(Field, { label:'Example sentence', value:sentence, setter:setSentence, placeholder:'彼は失敗した。' }),
+      React.createElement(Field, { label:'Translation', value:sentenceEn, setter:setSentenceEn, placeholder:'He failed.' }),
+      error && React.createElement('div', { style:{ color:C.wrong, fontSize:12, marginBottom:12 } }, error),
+      React.createElement('div', { style:{ display:'flex', gap:10 } },
+        React.createElement('button', { onClick:onClose, style:btn(C.line, C.ink) }, 'Cancel'),
+        React.createElement('button', { onClick:submit, style:btn(C.ink,'white') }, 'Add word')
+      )
+    )
+  );
+}
+
+function StatsMode({ items, progress, onReset, onClearWords, onRemove, onAdd }) {
+  const [showAdd, setShowAdd] = useState(false);
+  const studied = items.filter(it=>(progress[it.id]?.correct||0)+(progress[it.id]?.wrong||0)>0).length;
+  const mastered = items.filter(it=>(progress[it.id]?.correct||0)>=3).length;
+
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+      {showAdd && React.createElement(AddWordForm, { onAdd, onClose:()=>setShowAdd(false) })}
+      <div style={{ display:'flex', gap:10 }}>
+        {[['Total',items.length,C.ink],['Studied',studied,C.gold],['Mastered',mastered,C.correct]].map(([l,v,c])=>
+          React.createElement('div', { key:l, style:{ flex:1, textAlign:'center', padding:'12px 8px',
+            background:'white', borderRadius:8, border:`1px solid ${C.line}` }},
+            React.createElement('div', { style:{ fontSize:24, fontWeight:700, color:c } }, v),
+            React.createElement('div', { style:{ fontSize:11, color:C.muted } }, l)
+          )
+        )}
+      </div>
+      <button onClick={()=>setShowAdd(true)} style={{ ...btn(C.ink,'white'), flex:'unset' }}>+ Add word manually</button>
+      <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+        {[...items].sort((a,b)=>{
+          const pa=progress[a.id]||{}, pb=progress[b.id]||{};
+          return ((pb.correct||0)+(pb.wrong||0))-((pa.correct||0)+(pa.wrong||0));
+        }).map(item => {
+          const p=progress[item.id]||{correct:0,wrong:0};
+          const total=p.correct+p.wrong;
+          const pct=total>0?Math.round((p.correct/total)*100):null;
+          return React.createElement('div', { key:item.id,
+            style:{ display:'flex', alignItems:'center', gap:12, background:'white',
+              borderRadius:8, padding:'10px 14px', border:`1px solid ${C.line}` }},
+            React.createElement('div', { style:{ fontSize:24, fontWeight:700, color:C.ink, minWidth:48 } }, item.word),
+            React.createElement('div', { style:{ flex:1 } },
+              React.createElement('div', { style:{ fontSize:12, color:C.muted, fontFamily:'monospace' } }, item.reading),
+              React.createElement('div', { style:{ fontSize:13, color:C.ink } }, item.meanings[0])
+            ),
+            React.createElement('div', { style:{ textAlign:'right', fontSize:12 } },
+              total===0 ? React.createElement('span', { style:{ color:C.muted } }, 'unseen')
+              : React.createElement(React.Fragment, null,
+                  React.createElement('div', { style:{ color:pct>=70?C.correct:C.wrong, fontWeight:700 } }, pct+'%'),
+                  React.createElement('div', { style:{ color:C.muted } }, `${p.correct}✓ ${p.wrong}✗`)
+                )
+            ),
+            React.createElement('button', {
+              onClick:()=>{ if(confirm(`Remove "${item.word}"?`)) onRemove(item.id); },
+              style:{ background:'none', border:'none', color:C.muted, cursor:'pointer', fontSize:16, padding:'4px 6px', flexShrink:0 }
+            }, '✕')
+          );
+        })}
+      </div>
+      <button onClick={onReset} style={{ ...btn('white',C.wrong), border:`1px solid ${C.wrong}` }}>Reset progress</button>
+      <button onClick={onClearWords} style={{ ...btn('white',C.muted), border:`1px solid ${C.line}` }}>Load a different word list</button>
+    </div>
+  );
+}
+
+function ImportScreen({ onImport }) {
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [text, setText] = useState('');
+  const inputRef = useRef(null);
+
+  const process = raw => {
+    setLoading(true); setError('');
+    setTimeout(() => {
+      const parsed = parseLLN(raw);
+      setLoading(false);
+      if (!parsed) { setError("Couldn't read this — make sure it's a Language Reactor CSV or JSON export."); return; }
+      onImport(parsed);
+    }, 50);
+  };
+
+  const onFileChange = e => {
+    const file = e.target.files[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => process(ev.target.result);
+    reader.onerror = () => setError("Couldn't read the file.");
+    reader.readAsText(file, 'utf-8');
+  };
+
+  return (
+    <div style={{ maxWidth:420, margin:'0 auto', padding:28 }}>
+      <div style={{ textAlign:'center', marginBottom:28 }}>
+        <div style={{ fontSize:48, lineHeight:1, marginBottom:8 }}>漢字</div>
+        <div style={{ fontSize:22, fontWeight:700, color:C.ink }}>Kanji Practice</div>
+        <div style={{ fontSize:13, color:C.muted, marginTop:6 }}>Import your Language Reactor word list</div>
+      </div>
+      <input ref={inputRef} type="file" accept=".json,.csv,.txt" onChange={onFileChange} style={{ display:'none' }} />
+      <button onClick={()=>inputRef.current&&inputRef.current.click()} disabled={loading}
+        style={{ width:'100%', padding:'18px', borderRadius:12, border:`2px dashed ${C.line}`,
+          background:'white', cursor:'pointer', marginBottom:16 }}>
+        <div style={{ fontSize:26, marginBottom:4 }}>📂</div>
+        <div style={{ fontSize:15, fontWeight:700, color:C.ink }}>{loading?'Loading…':'Choose file'}</div>
+        <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>Works on desktop · may not work on mobile Chrome</div>
+      </button>
+      <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:14 }}>
+        <div style={{ flex:1, height:1, background:C.line }} />
+        <div style={{ fontSize:12, color:C.muted }}>or paste text</div>
+        <div style={{ flex:1, height:1, background:C.line }} />
+      </div>
+      <textarea value={text} onChange={e=>{ setText(e.target.value); setError(''); }}
+        placeholder="Paste your LLN CSV/JSON export here…"
+        style={{ width:'100%', height:110, padding:12, borderRadius:8,
+          border:`2px solid ${error?C.wrong:C.line}`, fontSize:12, resize:'vertical', outline:'none' }} />
+      {error && <div style={{ color:C.wrong, fontSize:12, marginTop:6, padding:'8px 12px', background:'#fdecea', borderRadius:8 }}>{error}</div>}
+      {text.trim() && (
+        <button onClick={()=>process(text)} disabled={loading}
+          style={{ marginTop:10, width:'100%', padding:'14px', borderRadius:8, border:'none',
+            background:C.ink, color:'white', fontSize:15, fontWeight:700, cursor:'pointer' }}>
+          {loading?'Loading…':'Load words'}
+        </button>
+      )}
+      <div style={{ marginTop:18, fontSize:12, color:C.muted, lineHeight:1.8,
+        background:C.paperDark, borderRadius:8, padding:'12px 14px' }}>
+        <strong>Export from Language Reactor:</strong><br/>
+        Saved Words → ⋯ menu → Export → TSV/CSV
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [items, setItems] = useState(null);
+  const [progress, setProgress] = useState({});
+  const [mode, setMode] = useState('write');
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      const [savedProgress, savedWords] = await Promise.all([
+        storageGet(PROGRESS_KEY),
+        storageGet(WORDS_KEY),
+      ]);
+      if (savedProgress) setProgress(savedProgress);
+      if (savedWords) setItems(savedWords);
+      setReady(true);
+    })();
+  }, []);
+
+  const handleImport = parsed => { setItems(parsed); storageSet(WORDS_KEY, parsed); };
+  const handleAnswer = (id, correct) => {
+    setProgress(prev => {
+      const e = prev[id]||{correct:0,wrong:0};
+      const next = { ...prev, [id]:{ correct:e.correct+(correct?1:0), wrong:e.wrong+(correct?0:1) } };
+      storageSet(PROGRESS_KEY, next);
+      return next;
+    });
+  };
+  const handleRemove = id => {
+    setItems(prev => { const next=prev.filter(it=>it.id!==id); storageSet(WORDS_KEY,next); return next; });
+  };
+  const handleAdd = word => {
+    setItems(prev => { const next=[...prev,word]; storageSet(WORDS_KEY,next); return next; });
+  };
+  const resetProgress = () => {
+    if (!confirm('Reset all your progress?')) return;
+    setProgress({}); storageSet(PROGRESS_KEY, {});
+  };
+  const clearWords = () => {
+    if (!confirm('Load a new word list? This won\'t delete your progress.')) return;
+    setItems(null); storageSet(WORDS_KEY, null);
+  };
+
+  if (!ready) return React.createElement('div', {
+    style:{ display:'flex', alignItems:'center', justifyContent:'center',
+      height:'100vh', background:C.paper, color:C.muted, fontSize:14 }}, 'Loading…');
+
+  if (!items) return React.createElement('div', {
+    style:{ minHeight:'100vh', background:C.paper, display:'flex', alignItems:'center' }},
+    React.createElement(ImportScreen, { onImport:handleImport }));
+
+  const sorted = [...items].sort((a,b)=>{
+    const pa=progress[a.id]||{correct:0,wrong:0}, pb=progress[b.id]||{correct:0,wrong:0};
+    return (pa.correct-pa.wrong*0.5)-(pb.correct-pb.wrong*0.5);
+  });
+
+  return React.createElement('div', { style:{ minHeight:'100vh', background:C.paper } },
+    React.createElement('div', { style:{ background:C.ink, color:'white', padding:'12px 16px',
+      display:'flex', alignItems:'center', justifyContent:'space-between' }},
+      React.createElement('div', { style:{ fontSize:18, fontWeight:700 } }, '漢字 ',
+        React.createElement('span', { style:{ fontSize:12, opacity:0.6, fontWeight:400 } }, items.length+' words')),
+      React.createElement('div', { style:{ display:'flex', gap:4 } },
+        [['write','✏️'],['quiz','🎯'],['stats','📊']].map(([m,icon])=>
+          React.createElement('button', { key:m, onClick:()=>setMode(m), style:{
+            padding:'6px 12px', borderRadius:6, border:'none',
+            background:mode===m?'rgba(255,255,255,0.2)':'transparent',
+            color:'white', fontSize:13, cursor:'pointer' }}, icon+' '+m)
+        )
+      )
+    ),
+    React.createElement('div', { style:{ maxWidth:420, margin:'0 auto', padding:20 } },
+      mode==='write' && React.createElement(WriteMode, { items:sorted, progress, onAnswer:handleAnswer, onRemove:handleRemove }),
+      mode==='quiz' && React.createElement(QuizMode, { key:items.length, items:sorted, progress, onAnswer:handleAnswer, onRemove:handleRemove }),
+      mode==='stats' && React.createElement(StatsMode, { items, progress, onReset:resetProgress, onClearWords:clearWords, onRemove:handleRemove, onAdd:handleAdd })
+    )
+  );
+}
+
+ReactDOM.render(React.createElement(App), document.getElementById('root'));
+</script>
+</body>
+</html>
