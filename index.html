@@ -6,6 +6,11 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="漢字">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#2e1a3e">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/svg+xml" href="icon.svg">
+<link rel="apple-touch-icon" href="icon-180.png">
 <title>漢字 Practice</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -2165,6 +2170,14 @@ function App() {
 }
 
 ReactDOM.render(React.createElement(App), document.getElementById('root'));
+</script>
+<script>
+  // Register the service worker for offline support (PWA)
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js').catch(() => {});
+    });
+  }
 </script>
 </body>
 </html>
