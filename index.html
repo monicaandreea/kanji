@@ -2033,9 +2033,9 @@ function App() {
     let added = 0, enriched = 0;
     setItems(prev => {
       const existing = prev || [];
-      const byWord = new Map(existing.map(it => [it.word, it]));
-      const existingIds = new Set(existing.map(it => it.id));
       const next = existing.map(it => ({ ...it })); // shallow copies so we can mutate sentences
+      const byWord = new Map(next.map(it => [it.word, it])); // map to the COPIES, not originals
+      const existingIds = new Set(next.map(it => it.id));
 
       parsed.forEach(incoming => {
         const dupById = existingIds.has(incoming.id);
