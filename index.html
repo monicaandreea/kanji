@@ -402,23 +402,50 @@ function kataToHira(s) {
   return (s || '').replace(/[\u30a1-\u30f6]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0x60));
 }
 
-// Word dictionary via Jisho (worked previously from the deployed site).
+// Word dictionary via Jisho. Jisho doesn't send CORS headers, so we try a
+// direct call first (works in some contexts) then fall back to CORS proxies.
 const wordInfoCache = {};
+
+function parseJishoData(d) {
+  const entry = d && d.data && d.data[0];
+  if (!entry) return null;
+  const reading = (entry.japanese && entry.japanese[0] && entry.japanese[0].reading) || '';
+  const senses = (entry.senses || []).map(s => ({
+    pos: s.parts_of_speech || [],
+    glosses: s.english_definitions || [],
+  }));
+  return { reading, senses };
+}
+
+async function jishoTry(url, unwrap) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('bad status');
+  let data = await res.json();
+  if (unwrap) data = unwrap(data);
+  return parseJishoData(data);
+}
+
 function fetchWordInfo(word) {
   if (wordInfoCache[word]) return wordInfoCache[word];
-  const p = fetch(`https://jisho.org/api/v1/search/words?keyword=${encodeURIComponent(word)}`)
-    .then(r => { if (!r.ok) throw new Error('bad'); return r.json(); })
-    .then(d => {
-      const entry = d && d.data && d.data[0];
-      if (!entry) return null;
-      const reading = (entry.japanese && entry.japanese[0] && entry.japanese[0].reading) || '';
-      const senses = (entry.senses || []).map(s => ({
-        pos: s.parts_of_speech || [],
-        glosses: s.english_definitions || [],
-      }));
-      return { reading, senses };
-    })
-    .catch(() => null);
+  const api = `https://jisho.org/api/v1/search/words?keyword=${encodeURIComponent(word)}`;
+  const candidates = [
+    // 1. direct (works if CORS allows)
+    () => jishoTry(api),
+    // 2. allorigins (wraps JSON in { contents: "<stringified json>" })
+    () => jishoTry(`https://api.allorigins.win/get?url=${encodeURIComponent(api)}`,
+      d => { try { return JSON.parse(d.contents); } catch { return null; } }),
+    // 3. corsproxy.io (passes body through directly)
+    () => jishoTry(`https://corsproxy.io/?url=${encodeURIComponent(api)}`),
+  ];
+  const p = (async () => {
+    for (const attempt of candidates) {
+      try {
+        const r = await attempt();
+        if (r) return r;
+      } catch (e) { /* try next */ }
+    }
+    return null;
+  })();
   wordInfoCache[word] = p;
   return p;
 }
@@ -639,11 +666,17 @@ function WordPopup({ token, onClose, onAdd, existing }) {
       id: `sentence-${lookup}-${Date.now()}`,
       word: lookup,
       reading: reading,
-      meanings: meanings.length ? meanings : ['(no definition found)'],
+      meanings: meanings.length ? meanings : ['(add meaning)'],
       sentence: null, sentenceEn: null,
     });
     setAdded(true);
   };
+
+  const loading = info === undefined;
+  const addLabel = alreadyHave ? 'Already in your words'
+    : added ? '✓ Added'
+    : loading ? 'Looking up…'
+    : (allMeanings.length ? '+ Add to my words' : '+ Add anyway (no definition)');
 
   return React.createElement('div', {
     onClick: onClose,
@@ -672,10 +705,10 @@ function WordPopup({ token, onClose, onAdd, existing }) {
         )
       ),
       React.createElement('button', {
-        onClick: alreadyHave || added ? undefined : doAdd,
-        disabled: alreadyHave || added,
-        style: { ...btn((alreadyHave || added) ? C.line : C.accent, 'white'), flex: 'unset', width: '100%', marginTop: 14 }
-      }, alreadyHave ? 'Already in your words' : added ? '✓ Added' : '+ Add to my words')
+        onClick: (alreadyHave || added || loading) ? undefined : doAdd,
+        disabled: alreadyHave || added || loading,
+        style: { ...btn((alreadyHave || added || loading) ? C.line : C.accent, 'white'), flex: 'unset', width: '100%', marginTop: 14 }
+      }, addLabel)
     )
   );
 }
@@ -1192,7 +1225,7 @@ function AddListForm({ onMerge, onClose }) {
   );
 }
 
-function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetWord, activeIds, onAddToActive, onRemoveFromActive, masteryTarget, onTapKanji }) {
+function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetWord, onMarkMastered, activeIds, onAddToActive, onRemoveFromActive, masteryTarget, onTapKanji }) {
   const [showAdd, setShowAdd] = useState(false);
   const [showAddList, setShowAddList] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -1682,14 +1715,14 @@ function App() {
     });
   };
   const markMastered = (id) => {
-    setProgress(prev => {
-      const e = prev[id]||{correct:0,wrong:0,streak:0};
-      const next = { ...prev, [id]: { ...e, streak: masteryTarget, correct: Math.max(e.correct, masteryTarget) } };
-      storageSet(PROGRESS_KEY, next);
-      return next;
-    });
+    const e = progress[id] || { correct:0, wrong:0, streak:0 };
+    const nextProgress = { ...progress, [id]: { ...e, streak: masteryTarget, correct: Math.max(e.correct||0, masteryTarget) } };
+    setProgress(nextProgress);
+    storageSet(PROGRESS_KEY, nextProgress);
     // drop it from the active deck since it's now mastered
-    setActiveIds(prev => { if(!prev) return prev; const n=prev.filter(x=>x!==id); persistDeck(n); return n; });
+    const nextDeck = (activeIds || []).filter(x => x !== id);
+    setActiveIds(nextDeck);
+    persistDeck(nextDeck);
   };
   const clearWords = () => {
     if (!confirm('Load a new word list? This won\'t delete your progress.')) return;
