@@ -454,6 +454,23 @@ function idbSet(db, key, val) {
   });
 }
 
+// Flatten a jmdict xref (array form) into a readable string, e.g. ["丸","まる",1] -> "丸 (まる)"
+function xrefToText(x) {
+  if (!x) return '';
+  if (typeof x === 'string') return x;
+  if (Array.isArray(x)) {
+    const kanji = x[0], kana = (typeof x[1] === 'string') ? x[1] : '';
+    if (kanji && kana && kanji !== kana) return `${kanji}（${kana}）`;
+    return kanji || kana || '';
+  }
+  // object form fallback
+  if (x.kanji || x.kana) {
+    if (x.kanji && x.kana) return `${x.kanji}（${x.kana}）`;
+    return x.kanji || x.kana || '';
+  }
+  return '';
+}
+
 // Build a compact index { map: {key: [entries]}, tags: {} } from raw JMdict json
 function buildIndex(json) {
   const map = {};
@@ -466,10 +483,22 @@ function buildIndex(json) {
     const kanji = (w.kanji || []).map(k => k.text);
     const kana = (w.kana || []).map(k => k.text);
     const reading = kana[0] || '';
-    const senses = (w.sense || []).map(s => ({
-      pos: (s.partOfSpeech || []),
-      glosses: (s.gloss || []).map(g => g.text),
-    })).filter(s => s.glosses.length);
+    const senses = (w.sense || []).map(s => {
+      const examples = (s.examples || []).map(ex => {
+        const sj = (ex.sentences || []).find(x => (x.land || x.lang) === 'jpn') || (ex.sentences || [])[0];
+        const se = (ex.sentences || []).find(x => (x.land || x.lang) === 'eng');
+        return { ja: sj ? sj.text : '', en: se ? se.text : '' };
+      }).filter(e => e.ja);
+      return {
+        pos: (s.partOfSpeech || []),
+        glosses: (s.gloss || []).map(g => g.text),
+        info: (s.info || []),
+        related: (s.related || []).map(xrefToText).filter(Boolean),
+        antonym: (s.antonym || []).map(xrefToText).filter(Boolean),
+        field: (s.field || []),
+        examples,
+      };
+    }).filter(s => s.glosses.length);
     if (!senses.length) continue;
     const entry = { reading, senses, kanji, kana };
     kanji.forEach(k => add(k, entry));
@@ -485,7 +514,7 @@ function initDictionary() {
     let db = null;
     try { db = await idbOpen(); } catch {}
     if (db) {
-      const cached = await idbGet(db, 'jmdict-index-v1');
+      const cached = await idbGet(db, 'jmdict-index-v2');
       if (cached && cached.map) {
         jmdictIndex = cached.map;
         jmdictTagMap = cached.tags || {};
@@ -500,7 +529,7 @@ function initDictionary() {
       const built = buildIndex(json);
       jmdictIndex = built.map;
       jmdictTagMap = built.tags;
-      if (db) { idbSet(db, 'jmdict-index-v1', built); } // cache for next time
+      if (db) { idbSet(db, 'jmdict-index-v2', built); } // cache for next time
       return true;
     } catch (e) {
       jmdictIndex = {}; // mark as "loaded but empty" so we don't retry forever
@@ -524,8 +553,20 @@ function fetchWordInfo(word) {
     const senses = best.senses.map(s => ({
       pos: (s.pos || []).map(t => jmdictTagMap[t] || prettyPos(t)),
       glosses: s.glosses,
+      info: s.info || [],
+      related: s.related || [],
+      antonym: s.antonym || [],
+      field: (s.field || []).map(t => jmdictTagMap[t] || t),
     }));
-    return { reading: best.reading || '', senses };
+    // Collect all example sentences across senses
+    const examples = [];
+    best.senses.forEach(s => (s.examples || []).forEach(e => { if (examples.length < 8) examples.push(e); }));
+    // Aggregate cross-references / notes for the "More info" section
+    const related = [...new Set(best.senses.flatMap(s => s.related || []))];
+    const antonym = [...new Set(best.senses.flatMap(s => s.antonym || []))];
+    const notes = [...new Set(best.senses.flatMap(s => s.info || []))];
+    const altForms = [...new Set([...(best.kanji||[]), ...(best.kana||[])])].filter(f => f !== word);
+    return { reading: best.reading || '', senses, examples, related, antonym, notes, altForms };
   })();
   wordInfoCache[word] = p;
   return p;
@@ -721,6 +762,23 @@ function TappableKanji({ text, onTapKanji, style }) {
 }
 
 // Popup showing a word's dictionary entry (from Jisho), with "Add to my words"
+// Collapsible dropdown section (starts collapsed)
+function Collapsible({ title, count, children }) {
+  const [open, setOpen] = React.useState(false);
+  return React.createElement('div', { style: { marginTop: 12, border: `1px solid ${C.line}`, borderRadius: 8, overflow: 'hidden' } },
+    React.createElement('button', {
+      onClick: () => setOpen(o => !o),
+      style: { width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        background: C.paperDark, border: 'none', padding: '10px 12px', cursor: 'pointer',
+        fontSize: 13, fontWeight: 600, color: C.ink, textAlign: 'left' }
+    },
+      React.createElement('span', null, title, count != null ? React.createElement('span', { style: { color: C.muted, fontWeight: 400 } }, ` (${count})`) : null),
+      React.createElement('span', { style: { color: C.muted, fontSize: 12 } }, open ? '▲' : '▼')
+    ),
+    open && React.createElement('div', { style: { padding: '12px', fontSize: 13, color: C.ink } }, children)
+  );
+}
+
 function WordPopup({ token, onClose, onAdd, existing }) {
   const [info, setInfo] = React.useState(undefined);
   const [added, setAdded] = React.useState(false);
@@ -795,6 +853,44 @@ function WordPopup({ token, onClose, onAdd, existing }) {
           )
         )
       ),
+
+      // More info (cross-refs, notes, alt forms) — collapsed by default
+      info && (() => {
+        const hasMore = (info.notes && info.notes.length) || (info.related && info.related.length)
+          || (info.antonym && info.antonym.length) || (info.altForms && info.altForms.length);
+        if (!hasMore) return null;
+        return React.createElement(Collapsible, { key: 'more', title: 'More info' },
+          info.notes && info.notes.length > 0 && React.createElement('div', { style: { marginBottom: 8 } },
+            React.createElement('div', { style: { fontSize: 11, color: C.muted, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 } }, 'Notes'),
+            info.notes.map((n, i) => React.createElement('div', { key: i }, n))
+          ),
+          info.altForms && info.altForms.length > 0 && React.createElement('div', { style: { marginBottom: 8 } },
+            React.createElement('div', { style: { fontSize: 11, color: C.muted, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 } }, 'Other forms'),
+            React.createElement('div', null, info.altForms.join('、'))
+          ),
+          info.related && info.related.length > 0 && React.createElement('div', { style: { marginBottom: 8 } },
+            React.createElement('div', { style: { fontSize: 11, color: C.muted, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 } }, 'See also'),
+            React.createElement('div', null, info.related.join('、'))
+          ),
+          info.antonym && info.antonym.length > 0 && React.createElement('div', null,
+            React.createElement('div', { style: { fontSize: 11, color: C.muted, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 } }, 'Antonyms'),
+            React.createElement('div', null, info.antonym.join('、'))
+          )
+        );
+      })(),
+
+      // Example sentences — collapsed by default (only if the file includes them)
+      info && info.examples && info.examples.length > 0 && React.createElement(Collapsible,
+        { key: 'ex', title: 'Example sentences', count: info.examples.length },
+        info.examples.map((ex, i) =>
+          React.createElement('div', { key: i, style: { marginBottom: 10, paddingBottom: 10,
+            borderBottom: i < info.examples.length - 1 ? `1px solid ${C.line}` : 'none' } },
+            React.createElement('div', { style: { fontSize: 15, color: C.ink, lineHeight: 1.5 } }, ex.ja),
+            ex.en && React.createElement('div', { style: { fontSize: 12, color: C.muted, marginTop: 2 } }, ex.en)
+          )
+        )
+      ),
+
       React.createElement('button', {
         onClick: (alreadyHave || added || loading) ? undefined : doAdd,
         disabled: alreadyHave || added || loading,
