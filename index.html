@@ -836,12 +836,14 @@ function WordPopup({ token, onClose, onAdd, existing }) {
 
   const doAdd = () => {
     const meanings = allMeanings.slice(0, 4);
+    const firstEx = (info && info.examples && info.examples[0]) || null;
     onAdd({
       id: `sentence-${lookup}-${Date.now()}`,
       word: lookup,
       reading: reading,
       meanings: meanings.length ? meanings : ['(add meaning)'],
-      sentence: null, sentenceEn: null,
+      sentence: firstEx ? firstEx.ja : null,
+      sentenceEn: firstEx ? (firstEx.en || null) : null,
     });
     setAdded(true);
   };
@@ -1234,7 +1236,7 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
       onClick: () => setEditingFields(true),
       style:{ padding:'10px 6px', borderRadius:8, border:`1px solid ${C.accent}`,
         background:'transparent', color:C.accent, cursor:'pointer', fontSize:12, fontWeight:600 }
-    }, '✎ Edit'),
+    }, 'Edit'),
     React.createElement('button', {
       onClick: () => { if (confirm(`Delete "${editItem.word}"?`)) onRemove(); },
       style:{ padding:'10px 6px', borderRadius:8, border:`1px solid ${C.wrong}`,
@@ -1628,9 +1630,9 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
             }, inActive ? '✓' : '+'),
             React.createElement('button', {
               onClick:()=>setEditing(item),
-              title:'Edit word',
+              title:'View word',
               style:{ background:'none', border:'none', color:C.muted, cursor:'pointer', fontSize:16, padding:'4px 4px', flexShrink:0 }
-            }, '✎')
+            }, '👁')
           );
         })}
       </div>
