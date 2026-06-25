@@ -1134,7 +1134,7 @@ function btn(bg, color, extra) {
 function WriteMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTapWord, idx, onAdvance }) {
   const [phase, setPhase] = useState('write');
   const [clearTrigger, setClearTrigger] = useState(0);
-  const [showStrokes, setShowStrokes] = useState(false); // stroke-order hidden by default for self-testing
+  const [showStrokes, setShowStrokes] = useState(true); // stroke-order shown by default on reveal
 
   const safeIdx = Math.min(idx, items.length - 1);
   const item = items[safeIdx];
@@ -1142,7 +1142,7 @@ function WriteMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTap
 
   React.useEffect(() => { onCurrentWord && onCurrentWord(item.id); }, [item.id]);
   // Reset to write phase + hide strokes whenever the card changes
-  React.useEffect(() => { setPhase('write'); setShowStrokes(false); }, [item.id]);
+  React.useEffect(() => { setPhase('write'); setShowStrokes(true); }, [item.id]);
 
   const reveal = () => setPhase('reveal');
   const clear = () => setClearTrigger(t => t + 1);
@@ -1168,11 +1168,18 @@ function WriteMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTap
             <div style={{ fontSize:18, color:C.ink, fontWeight:600, marginBottom:6 }}>
               <TappableKanji text={item.word} onTapKanji={onTapKanji} /> · <KanaReading word={item.word} fallback={item.reading} />
             </div>
-            <button onClick={() => setShowStrokes(s => !s)}
-              style={{ background:C.card, border:`1px solid ${C.line}`, borderRadius:6,
-                padding:'5px 12px', fontSize:12, cursor:'pointer', color:C.ink, marginBottom:10 }}>
-              {showStrokes ? 'Hide stroke order' : 'Show stroke order'}
-            </button>
+            <div style={{ display:'flex', gap:8, justifyContent:'center', marginBottom:10 }}>
+              <button onClick={() => setShowStrokes(s => !s)}
+                style={{ background:C.card, border:`1px solid ${C.line}`, borderRadius:6,
+                  padding:'5px 12px', fontSize:12, cursor:'pointer', color:C.ink }}>
+                {showStrokes ? 'Hide stroke order' : 'Show stroke order'}
+              </button>
+              <button onClick={practice}
+                style={{ background:C.card, border:`1px solid ${C.line}`, borderRadius:6,
+                  padding:'5px 12px', fontSize:12, cursor:'pointer', color:C.ink }}>
+                Practice (clear &amp; rewrite)
+              </button>
+            </div>
             {showStrokes && <StrokeOrder word={item.word} />}
           </div>
           {getSentences(item).length > 0 && (
@@ -1188,12 +1195,9 @@ function WriteMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTap
           <button onClick={reveal} style={{ ...btn(C.accent,'white'), flex:2 }}>Reveal</button>
         </div>
       ) : (
-        <div style={{ display:'flex', flexDirection:'column', gap:10, width:'100%' }}>
-          <button onClick={practice} style={{ ...btn(C.card,C.ink), border:`1px solid ${C.line}` }}>Practice (clear & rewrite)</button>
-          <div style={{ display:'flex', gap:10, width:'100%' }}>
-            <button onClick={() => grade(false)} style={btn(C.wrong,'white')}>✗ Wrong</button>
-            <button onClick={() => grade(true)} style={btn(C.correct,'white')}>✓ Correct</button>
-          </div>
+        <div style={{ display:'flex', gap:10, width:'100%' }}>
+          <button onClick={() => grade(false)} style={btn(C.wrong,'white')}>✗ Wrong</button>
+          <button onClick={() => grade(true)} style={btn(C.correct,'white')}>✓ Correct</button>
         </div>
       )}
     </div>
