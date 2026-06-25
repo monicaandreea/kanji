@@ -168,6 +168,7 @@ const DARK = {
   accent: "#6b4a8f", header: "#2a1d38",
 };
 const THEME_KEY = "kanji-theme";
+const MODE_KEY = "kanji-mode";
 function loadTheme() {
   const t = localStorage.getItem(THEME_KEY);
   return t === "dark" ? "dark" : "light";
@@ -1061,7 +1062,7 @@ function WriteMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTap
       {phase === 'reveal' && (
         <div style={{ width:'100%' }}>
           <div style={{ textAlign:'center', marginBottom:8 }}>
-            <div style={{ fontSize:13, color:C.muted, marginBottom:4 }}>
+            <div style={{ fontSize:18, color:C.ink, fontWeight:600, marginBottom:6 }}>
               <TappableKanji text={item.word} onTapKanji={onTapKanji} /> · <KanaReading word={item.word} fallback={item.reading} />
             </div>
             <StrokeOrder word={item.word} />
@@ -1490,6 +1491,18 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
   const [search, setSearch] = useState('');
   const [activeFirst, setActiveFirst] = useState(false);
   const [filter, setFilter] = useState('all'); // all | studied | mastered | new
+  // Snapshot of which words count as "active" for SORTING purposes. We freeze
+  // this whenever the view context (filter/search/activeFirst toggle) changes,
+  // but NOT when a single word is toggled — so toggling doesn't re-sort the list
+  // and bounce your scroll position.
+  const sortActiveRef = React.useRef(null);
+  const sortCtxRef = React.useRef('');
+  const sortCtx = `${filter}|${search}|${activeFirst}`;
+  if (sortCtxRef.current !== sortCtx || sortActiveRef.current === null) {
+    sortCtxRef.current = sortCtx;
+    sortActiveRef.current = new Set(activeIds || []);
+  }
+  const sortActiveSet = sortActiveRef.current;
   const studied = items.filter(it=>{ const p=progress[it.id]||{}; return (p.correct||0)+(p.wrong||0)>0 && (p.streak||0)<masteryTarget; }).length;
   const mastered = items.filter(it=>(progress[it.id]?.streak||0)>=masteryTarget).length;
   const unseen = items.filter(it=>!(progress[it.id]?.correct||progress[it.id]?.wrong)).length;
@@ -1562,11 +1575,18 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
           q ? 'No words match your search.' : 'No words yet.')}
         {[...filtered].sort((a,b)=>{
           if (activeFirst) {
-            const aa=activeIds.includes(a.id)?0:1, bb=activeIds.includes(b.id)?0:1;
+            const aa=sortActiveSet.has(a.id)?0:1, bb=sortActiveSet.has(b.id)?0:1;
             if (aa!==bb) return aa-bb;
           }
-          const pa=progress[a.id]||{}, pb=progress[b.id]||{};
-          return ((pb.correct||0)+(pb.wrong||0))-((pa.correct||0)+(pa.wrong||0));
+          // "Studying" stays ordered by most-practiced; everything else is
+          // alphabetical by reading (Japanese gojūon order, kana-normalized)
+          if (filter==='studied') {
+            const pa=progress[a.id]||{}, pb=progress[b.id]||{};
+            return ((pb.correct||0)+(pb.wrong||0))-((pa.correct||0)+(pa.wrong||0));
+          }
+          const ra = kataToHira(a.reading || a.word || '');
+          const rb = kataToHira(b.reading || b.word || '');
+          return ra.localeCompare(rb, 'ja');
         }).map(item => {
           const p=progress[item.id]||{correct:0,wrong:0,streak:0};
           const total=p.correct+p.wrong;
@@ -1830,7 +1850,11 @@ function KanjiMode({ items, onTapWord }) {
 function App() {
   const [items, setItems] = useState(null);
   const [progress, setProgress] = useState({});
-  const [mode, setMode] = useState('write');
+  const [mode, setModeState] = useState(() => {
+    const m = localStorage.getItem(MODE_KEY);
+    return ['write','quiz','words','read','kanji'].includes(m) ? m : 'write';
+  });
+  const setMode = (m) => { setModeState(m); try { localStorage.setItem(MODE_KEY, m); } catch {} };
   const [ready, setReady] = useState(false);
   const [showAccount, setShowAccount] = useState(false);
   const [sessionSize, setSessionSizeState] = useState(() => {
