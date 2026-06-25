@@ -402,54 +402,130 @@ function kataToHira(s) {
   return (s || '').replace(/[\u30a1-\u30f6]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0x60));
 }
 
-// Word dictionary. Jotoba is CORS-native and fast; we use it as the primary
-// source and fall back to Jisho (via a proxy) only if Jotoba returns nothing.
+// ── Local JMdict dictionary (jmdict-simplified format) ───────────────────
+// Loads jmdict.json once from the same origin (no CORS), builds an index,
+// and caches the built index in IndexedDB so future loads are instant.
 const wordInfoCache = {};
-
-function normalizeJisho(d) {
-  const entry = d && d.data && d.data[0];
-  if (!entry) return null;
-  const reading = (entry.japanese && entry.japanese[0] && entry.japanese[0].reading) || '';
-  const senses = (entry.senses || []).map(s => ({
-    pos: s.parts_of_speech || [],
-    glosses: s.english_definitions || [],
-  }));
-  return senses.length ? { reading, senses } : null;
+const POS_LABELS = {
+  n: 'noun', adj: 'adjective', 'adj-i': 'i-adjective', 'adj-na': 'na-adjective',
+  v: 'verb', v1: 'ichidan verb', v5: 'godan verb', vs: 'suru verb', vk: 'kuru verb',
+  vt: 'transitive verb', vi: 'intransitive verb', adv: 'adverb', exp: 'expression',
+  int: 'interjection', conj: 'conjunction', prt: 'particle', pn: 'pronoun',
+  'aux-v': 'auxiliary verb', suf: 'suffix', pref: 'prefix', num: 'numeric', cnt: 'counter',
+};
+function prettyPos(tag) {
+  if (!tag) return '';
+  if (POS_LABELS[tag]) return POS_LABELS[tag];
+  // strip jmdict-style detail, e.g. "v5r" -> "v5", "adj-no" -> "adj"
+  const base = tag.split('-')[0];
+  return POS_LABELS[base] || tag;
 }
 
-async function tryJotoba(word) {
-  const res = await fetch('https://jotoba.de/api/search/words', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-    body: JSON.stringify({ query: word, language: 'English' }),
+let jmdictIndex = null;       // Map: surface/reading string -> [entry, ...]
+let jmdictPromise = null;     // resolves when index is ready (or null on fail)
+let jmdictTagMap = {};        // abbreviation -> full label from the file
+
+function idbOpen() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open('kanji-dict', 1);
+    req.onupgradeneeded = () => { req.result.createObjectStore('kv'); };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
   });
-  if (!res.ok) throw new Error('jotoba status');
-  const d = await res.json();
-  const w = d && d.words && d.words[0];
-  if (!w) return null;
-  const reading = (w.reading && (w.reading.kana || w.reading.kanji)) || '';
-  const senses = (w.senses || []).map(s => ({
-    pos: Array.isArray(s.pos)
-      ? s.pos.map(p => typeof p === 'string' ? p : (p && Object.keys(p)[0]) || '').filter(Boolean)
-      : [],
-    glosses: s.glosses || [],
-  }));
-  return senses.length ? { reading, senses } : null;
+}
+function idbGet(db, key) {
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction('kv', 'readonly');
+      const r = tx.objectStore('kv').get(key);
+      r.onsuccess = () => resolve(r.result);
+      r.onerror = () => resolve(null);
+    } catch { resolve(null); }
+  });
+}
+function idbSet(db, key, val) {
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction('kv', 'readwrite');
+      tx.objectStore('kv').put(val, key);
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => resolve(false);
+    } catch { resolve(false); }
+  });
 }
 
-async function tryJishoProxy(word) {
-  const api = `https://jisho.org/api/v1/search/words?keyword=${encodeURIComponent(word)}`;
-  const res = await fetch(`https://corsproxy.io/?url=${encodeURIComponent(api)}`);
-  if (!res.ok) throw new Error('proxy status');
-  return normalizeJisho(await res.json());
+// Build a compact index { map: {key: [entries]}, tags: {} } from raw JMdict json
+function buildIndex(json) {
+  const map = {};
+  const add = (key, entry) => {
+    if (!key) return;
+    if (!map[key]) map[key] = [];
+    if (map[key].length < 6) map[key].push(entry); // cap dup keys
+  };
+  for (const w of json.words) {
+    const kanji = (w.kanji || []).map(k => k.text);
+    const kana = (w.kana || []).map(k => k.text);
+    const reading = kana[0] || '';
+    const senses = (w.sense || []).map(s => ({
+      pos: (s.partOfSpeech || []),
+      glosses: (s.gloss || []).map(g => g.text),
+    })).filter(s => s.glosses.length);
+    if (!senses.length) continue;
+    const entry = { reading, senses, kanji, kana };
+    kanji.forEach(k => add(k, entry));
+    kana.forEach(k => add(k, entry));
+  }
+  return { map, tags: json.tags || {} };
 }
+
+function initDictionary() {
+  if (jmdictPromise) return jmdictPromise;
+  jmdictPromise = (async () => {
+    // 1. Try IndexedDB cache
+    let db = null;
+    try { db = await idbOpen(); } catch {}
+    if (db) {
+      const cached = await idbGet(db, 'jmdict-index-v1');
+      if (cached && cached.map) {
+        jmdictIndex = cached.map;
+        jmdictTagMap = cached.tags || {};
+        return true;
+      }
+    }
+    // 2. Fetch and build from jmdict.json (same origin, no CORS)
+    try {
+      const res = await fetch('jmdict.json');
+      if (!res.ok) throw new Error('no dict file');
+      const json = await res.json();
+      const built = buildIndex(json);
+      jmdictIndex = built.map;
+      jmdictTagMap = built.tags;
+      if (db) { idbSet(db, 'jmdict-index-v1', built); } // cache for next time
+      return true;
+    } catch (e) {
+      jmdictIndex = {}; // mark as "loaded but empty" so we don't retry forever
+      return false;
+    }
+  })();
+  return jmdictPromise;
+}
+// Kick off dictionary load in the background as soon as the script runs
+if (typeof window !== 'undefined' && window.indexedDB) { initDictionary(); }
 
 function fetchWordInfo(word) {
   if (wordInfoCache[word]) return wordInfoCache[word];
   const p = (async () => {
-    try { const r = await tryJotoba(word); if (r) return r; } catch (e) {}
-    try { const r = await tryJishoProxy(word); if (r) return r; } catch (e) {}
-    return null;
+    await initDictionary();
+    if (!jmdictIndex) return null;
+    const hits = jmdictIndex[word];
+    if (!hits || !hits.length) return null;
+    // Prefer the entry whose kanji/kana exactly matches the query
+    const best = hits.find(h => (h.kanji || []).includes(word)) || hits[0];
+    const senses = best.senses.map(s => ({
+      pos: (s.pos || []).map(t => jmdictTagMap[t] || prettyPos(t)),
+      glosses: s.glosses,
+    }));
+    return { reading: best.reading || '', senses };
   })();
   wordInfoCache[word] = p;
   return p;
@@ -651,12 +727,22 @@ function WordPopup({ token, onClose, onAdd, existing }) {
   const lookup = token ? (token.basic || token.surface) : null;
 
   React.useEffect(() => {
-    if (!lookup) return;
+    if (!token) return;
     let alive = true;
     setInfo(undefined); setAdded(false);
-    fetchWordInfo(lookup).then(d => { if (alive) setInfo(d); });
+    (async () => {
+      // Try dictionary form, then surface form, then kana reading
+      const candidates = [token.basic, token.surface, kataToHira(token.reading)]
+        .filter((v, i, a) => v && a.indexOf(v) === i);
+      let result = null;
+      for (const c of candidates) {
+        result = await fetchWordInfo(c);
+        if (result) break;
+      }
+      if (alive) setInfo(result);
+    })();
     return () => { alive = false; };
-  }, [lookup]);
+  }, [token]);
 
   if (!token) return null;
 
