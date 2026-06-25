@@ -402,11 +402,11 @@ function kataToHira(s) {
   return (s || '').replace(/[\u30a1-\u30f6]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0x60));
 }
 
-// Word dictionary via Jisho. Jisho doesn't send CORS headers, so we try a
-// direct call first (works in some contexts) then fall back to CORS proxies.
+// Word dictionary. Jotoba is CORS-native and fast; we use it as the primary
+// source and fall back to Jisho (via a proxy) only if Jotoba returns nothing.
 const wordInfoCache = {};
 
-function parseJishoData(d) {
+function normalizeJisho(d) {
   const entry = d && d.data && d.data[0];
   if (!entry) return null;
   const reading = (entry.japanese && entry.japanese[0] && entry.japanese[0].reading) || '';
@@ -414,36 +414,41 @@ function parseJishoData(d) {
     pos: s.parts_of_speech || [],
     glosses: s.english_definitions || [],
   }));
-  return { reading, senses };
+  return senses.length ? { reading, senses } : null;
 }
 
-async function jishoTry(url, unwrap) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error('bad status');
-  let data = await res.json();
-  if (unwrap) data = unwrap(data);
-  return parseJishoData(data);
+async function tryJotoba(word) {
+  const res = await fetch('https://jotoba.de/api/search/words', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+    body: JSON.stringify({ query: word, language: 'English' }),
+  });
+  if (!res.ok) throw new Error('jotoba status');
+  const d = await res.json();
+  const w = d && d.words && d.words[0];
+  if (!w) return null;
+  const reading = (w.reading && (w.reading.kana || w.reading.kanji)) || '';
+  const senses = (w.senses || []).map(s => ({
+    pos: Array.isArray(s.pos)
+      ? s.pos.map(p => typeof p === 'string' ? p : (p && Object.keys(p)[0]) || '').filter(Boolean)
+      : [],
+    glosses: s.glosses || [],
+  }));
+  return senses.length ? { reading, senses } : null;
+}
+
+async function tryJishoProxy(word) {
+  const api = `https://jisho.org/api/v1/search/words?keyword=${encodeURIComponent(word)}`;
+  const res = await fetch(`https://corsproxy.io/?url=${encodeURIComponent(api)}`);
+  if (!res.ok) throw new Error('proxy status');
+  return normalizeJisho(await res.json());
 }
 
 function fetchWordInfo(word) {
   if (wordInfoCache[word]) return wordInfoCache[word];
-  const api = `https://jisho.org/api/v1/search/words?keyword=${encodeURIComponent(word)}`;
-  const candidates = [
-    // 1. direct (works if CORS allows)
-    () => jishoTry(api),
-    // 2. allorigins (wraps JSON in { contents: "<stringified json>" })
-    () => jishoTry(`https://api.allorigins.win/get?url=${encodeURIComponent(api)}`,
-      d => { try { return JSON.parse(d.contents); } catch { return null; } }),
-    // 3. corsproxy.io (passes body through directly)
-    () => jishoTry(`https://corsproxy.io/?url=${encodeURIComponent(api)}`),
-  ];
   const p = (async () => {
-    for (const attempt of candidates) {
-      try {
-        const r = await attempt();
-        if (r) return r;
-      } catch (e) { /* try next */ }
-    }
+    try { const r = await tryJotoba(word); if (r) return r; } catch (e) {}
+    try { const r = await tryJishoProxy(word); if (r) return r; } catch (e) {}
     return null;
   })();
   wordInfoCache[word] = p;
