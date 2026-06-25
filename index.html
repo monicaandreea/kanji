@@ -373,6 +373,56 @@ function initKuroshiro(cb) {
 
 const furiganaCache = {};
 
+// Tokenize a sentence into words using the loaded kuromoji tokenizer.
+// Returns array of { surface, reading (hiragana), basic (dictionary form) }.
+const tokenizeCache = {};
+function tokenizeSentence(sentence, cb) {
+  if (tokenizeCache[sentence]) { cb(tokenizeCache[sentence]); return; }
+  initKuroshiro(k => {
+    if (!k) { cb(null); return; }
+    try {
+      // Reach the underlying kuromoji tokenizer inside the analyzer
+      const analyzer = k._analyzer || (k.analyzer);
+      const tok = analyzer && (analyzer._analyzer || analyzer.tokenizer || analyzer._tokenizer);
+      if (!tok || typeof tok.tokenize !== 'function') { cb(null); return; }
+      const tokens = tok.tokenize(sentence).map(t => ({
+        surface: t.surface_form,
+        reading: t.reading && t.reading !== '*' ? t.reading : null,
+        basic: t.basic_form && t.basic_form !== '*' ? t.basic_form : t.surface_form,
+        pos: t.pos,
+      }));
+      tokenizeCache[sentence] = tokens;
+      cb(tokens);
+    } catch (e) { cb(null); }
+  });
+}
+
+// Katakana -> hiragana
+function kataToHira(s) {
+  return (s || '').replace(/[\u30a1-\u30f6]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0x60));
+}
+
+// Word dictionary via Jisho (worked previously from the deployed site).
+const wordInfoCache = {};
+function fetchWordInfo(word) {
+  if (wordInfoCache[word]) return wordInfoCache[word];
+  const p = fetch(`https://jisho.org/api/v1/search/words?keyword=${encodeURIComponent(word)}`)
+    .then(r => { if (!r.ok) throw new Error('bad'); return r.json(); })
+    .then(d => {
+      const entry = d && d.data && d.data[0];
+      if (!entry) return null;
+      const reading = (entry.japanese && entry.japanese[0] && entry.japanese[0].reading) || '';
+      const senses = (entry.senses || []).map(s => ({
+        pos: s.parts_of_speech || [],
+        glosses: s.english_definitions || [],
+      }));
+      return { reading, senses };
+    })
+    .catch(() => null);
+  wordInfoCache[word] = p;
+  return p;
+}
+
 function annotateSentence(sentence, cb) {
   if (furiganaCache[sentence] !== undefined) { cb(furiganaCache[sentence]); return; }
   furiganaCache[sentence] = null;
@@ -407,24 +457,29 @@ function KanaReading({ word, fallback, style }) {
   return React.createElement('span', { style }, kana || fallback || '');
 }
 
-function SentenceDisplay({ sentence, sentenceEn, word, reading, showEn, onTapKanji }) {
+function SentenceDisplay({ sentence, sentenceEn, word, reading, showEn, onTapKanji, onTapWord }) {
   const [furiganaHtml, setFuriganaHtml] = React.useState(null);
 
   React.useEffect(() => {
-    if (!sentence) return;
+    if (!sentence || onTapWord) return; // skip furigana html when using tappable tokens
     setFuriganaHtml(null);
     annotateSentence(sentence, html => setFuriganaHtml(html));
-  }, [sentence]);
+  }, [sentence, onTapWord]);
 
   if (!sentence) return null;
 
-  // While loading, show plain sentence; once ready inject ruby HTML
-  const inner = furiganaHtml
-    ? React.createElement('span', {
-        dangerouslySetInnerHTML: { __html: furiganaHtml },
-        style: { '--target': `"${word}"` }
-      })
-    : React.createElement('span', null, sentence);
+  let inner;
+  if (onTapWord) {
+    // Tappable per-word tokens (with their own furigana)
+    inner = React.createElement(TappableSentence, { sentence, onTapWord });
+  } else {
+    inner = furiganaHtml
+      ? React.createElement('span', {
+          dangerouslySetInnerHTML: { __html: furiganaHtml },
+          style: { '--target': `"${word}"` }
+        })
+      : React.createElement('span', null, sentence);
+  }
 
   return React.createElement('div', { style: { fontSize: 17, lineHeight: 2.2, color: C.ink } },
     React.createElement('div', null, inner),
@@ -557,6 +612,106 @@ function TappableKanji({ text, onTapKanji, style }) {
   );
 }
 
+// Popup showing a word's dictionary entry (from Jisho), with "Add to my words"
+function WordPopup({ token, onClose, onAdd, existing }) {
+  const [info, setInfo] = React.useState(undefined);
+  const [added, setAdded] = React.useState(false);
+  const lookup = token ? (token.basic || token.surface) : null;
+
+  React.useEffect(() => {
+    if (!lookup) return;
+    let alive = true;
+    setInfo(undefined); setAdded(false);
+    fetchWordInfo(lookup).then(d => { if (alive) setInfo(d); });
+    return () => { alive = false; };
+  }, [lookup]);
+
+  if (!token) return null;
+
+  const alreadyHave = existing && existing.some(w => w.word === lookup);
+  const senses = (info && info.senses) || [];
+  const reading = (info && info.reading) || kataToHira(token.reading) || '';
+  const allMeanings = senses.flatMap(s => s.glosses || []);
+
+  const doAdd = () => {
+    const meanings = allMeanings.slice(0, 4);
+    onAdd({
+      id: `sentence-${lookup}-${Date.now()}`,
+      word: lookup,
+      reading: reading,
+      meanings: meanings.length ? meanings : ['(no definition found)'],
+      sentence: null, sentenceEn: null,
+    });
+    setAdded(true);
+  };
+
+  return React.createElement('div', {
+    onClick: onClose,
+    style: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 210,
+      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }},
+    React.createElement('div', {
+      onClick: e => e.stopPropagation(),
+      style: { background: C.paper, borderRadius: 14, padding: 22, width: '100%', maxWidth: 360,
+        maxHeight: '80vh', overflowY: 'auto' }},
+      React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 } },
+        React.createElement('div', null,
+          React.createElement('div', { style: { fontSize: 30, fontWeight: 700, color: C.ink, lineHeight: 1.1 } }, lookup),
+          reading && reading !== lookup && React.createElement('div', { style: { fontSize: 14, color: C.muted, marginTop: 2 } }, reading)
+        ),
+        React.createElement('button', { onClick: onClose, style: { background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: C.muted } }, '✕')
+      ),
+      info === undefined && React.createElement('div', { style: { color: C.muted, fontSize: 13, padding: '10px 0' } }, 'Looking up…'),
+      info === null && React.createElement('div', { style: { color: C.muted, fontSize: 13, padding: '10px 0' } }, 'No dictionary entry found.'),
+      info && React.createElement('div', { style: { fontSize: 14, color: C.ink } },
+        senses.slice(0, 6).map((s, i) =>
+          React.createElement('div', { key: i, style: { marginBottom: 8 } },
+            s.pos && s.pos.length > 0 &&
+              React.createElement('div', { style: { fontSize: 10, color: C.muted, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 1 } }, s.pos.join(', ')),
+            React.createElement('div', null, `${i + 1}. ${(s.glosses || []).join('; ')}`)
+          )
+        )
+      ),
+      React.createElement('button', {
+        onClick: alreadyHave || added ? undefined : doAdd,
+        disabled: alreadyHave || added,
+        style: { ...btn((alreadyHave || added) ? C.line : C.accent, 'white'), flex: 'unset', width: '100%', marginTop: 14 }
+      }, alreadyHave ? 'Already in your words' : added ? '✓ Added' : '+ Add to my words')
+    )
+  );
+}
+
+// Renders a Japanese sentence as tappable word tokens (with furigana).
+function TappableSentence({ sentence, onTapWord }) {
+  const [tokens, setTokens] = React.useState(null);
+  React.useEffect(() => {
+    if (!sentence) return;
+    setTokens(null);
+    tokenizeSentence(sentence, setTokens);
+  }, [sentence]);
+
+  if (!tokens) {
+    // Fallback: plain sentence while tokenizing
+    return React.createElement('span', null, sentence);
+  }
+  return React.createElement('span', null,
+    tokens.map((t, i) => {
+      const hasJa = [...(t.surface||'')].some(ch => isKanjiChar(ch) || (ch >= 'ぁ' && ch <= 'ヿ'));
+      const tappable = hasJa && t.pos && !['助詞','助動詞','記号'].includes(t.pos);
+      if (!tappable) return React.createElement('span', { key: i }, t.surface);
+      const hira = kataToHira(t.reading);
+      const showFuri = hira && [...(t.surface||'')].some(isKanjiChar) && hira !== t.surface;
+      return React.createElement('span', {
+        key: i,
+        onClick: () => onTapWord(t),
+        style: { cursor: 'pointer', borderBottom: `1px dotted ${C.gold}`, paddingBottom: 1 }
+      }, showFuri
+        ? React.createElement('ruby', null, t.surface, React.createElement('rt', null, hira))
+        : t.surface
+      );
+    })
+  );
+}
+
 function DrawCanvas({ clearTrigger }) {
   const canvasRef = useRef(null);
   const drawing = useRef(false);
@@ -615,7 +770,7 @@ function btn(bg, color, extra) {
     background: bg, color, fontSize: 14, cursor: 'pointer', fontWeight: 600, ...(extra||{}) };
 }
 
-function WriteMode({ items, progress, onAnswer, onCurrentWord, onTapKanji }) {
+function WriteMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTapWord }) {
   const [idx, setIdx] = useState(0);
   const [phase, setPhase] = useState('write');
   const [clearTrigger, setClearTrigger] = useState(0);
@@ -655,7 +810,7 @@ function WriteMode({ items, progress, onAnswer, onCurrentWord, onTapKanji }) {
           {item.sentence && (
             <div style={{ background:C.paperDark, borderRadius:8, padding:'12px 14px', width:'100%' }}>
               <SentenceDisplay sentence={item.sentence} sentenceEn={item.sentenceEn}
-                word={item.word} reading={item.reading} showEn={true} onTapKanji={onTapKanji} />
+                word={item.word} reading={item.reading} showEn={true} onTapKanji={onTapKanji} onTapWord={onTapWord} />
             </div>
           )}
         </div>
@@ -678,7 +833,7 @@ function WriteMode({ items, progress, onAnswer, onCurrentWord, onTapKanji }) {
   );
 }
 
-function QuizMode({ items, progress, onAnswer, onCurrentWord, onTapKanji }) {
+function QuizMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTapWord }) {
   const snapshotRef = useRef(null);
   useEffect(() => { snapshotRef.current = [...items]; }, []);
 
@@ -727,7 +882,7 @@ function QuizMode({ items, progress, onAnswer, onCurrentWord, onTapKanji }) {
       <div style={{ minHeight:60, background:C.paperDark, borderRadius:8, padding:'12px 16px' }}>
         {item.sentence
           ? React.createElement(SentenceDisplay, { sentence:item.sentence, sentenceEn:item.sentenceEn,
-              word:item.word, reading:item.reading, showEn:revealed, onTapKanji:onTapKanji })
+              word:item.word, reading:item.reading, showEn:revealed, onTapKanji:onTapKanji, onTapWord:onTapWord })
           : React.createElement('span', { style:{ color:C.muted, fontSize:12 } }, 'No example sentence')}
       </div>
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
@@ -769,7 +924,7 @@ function FormField({ label, value, setter, placeholder, hint, clearError }) {
     React.createElement('div', { style:{ fontSize:12, fontWeight:600, color:C.ink, marginBottom:4 } }, label),
     React.createElement('input', { value, onChange:e=>{ setter(e.target.value); clearError && clearError(); },
       placeholder, style:{ width:'100%', padding:'10px 12px', borderRadius:8,
-        border:`1px solid ${C.line}`, fontSize:16, outline:'none', background:C.card, boxSizing:'border-box' } }),
+        border:`1px solid ${C.line}`, fontSize:16, outline:'none', background:C.card, color:C.ink, boxSizing:'border-box' } }),
     hint && React.createElement('div', { style:{ fontSize:11, color:C.muted, marginTop:3 } }, hint)
   );
 }
@@ -810,7 +965,7 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
       // Quick actions (edit mode only)
       isEdit && React.createElement('div', { style:{ display:'flex', gap:8, marginBottom:18 } },
         React.createElement('button', {
-          onClick: () => { if (!isMastered && confirm(`Mark "${editItem.word}" as mastered?`)) onMarkMastered(); },
+          onClick: () => { if (!isMastered) onMarkMastered(); },
           disabled: isMastered,
           style:{ flex:1, padding:'9px 6px', borderRadius:8, border:`1px solid ${C.correct}`,
             background: isMastered ? C.softGreen : 'transparent', color:C.correct,
@@ -923,7 +1078,7 @@ function AccountScreen({ onClose, onReset, onClearWords, sessionSize, onSessionS
         onChange: e => setSizeInput(e.target.value),
         placeholder: 'Custom…',
         style: { flex: 1, padding: '10px 14px', borderRadius: 8, border: `1px solid ${C.line}`,
-          fontSize: 14, outline: 'none', boxSizing: 'border-box' } }),
+          fontSize: 14, outline: 'none', boxSizing: 'border-box', color: C.ink, background: C.card } }),
       React.createElement('button', {
         onClick: () => { const n = parseInt(sizeInput, 10); if (Number.isFinite(n) && n > 0) onSessionSize(n); },
         style: { ...btn(C.accent, 'white'), flex: 'unset', padding: '10px 18px' } }, 'Set')
@@ -955,7 +1110,7 @@ function AccountScreen({ onClose, onReset, onClearWords, sessionSize, onSessionS
       value: input, onChange: e => setInput(e.target.value),
       placeholder: 'Paste a Sync ID…',
       style: { width: '100%', padding: '12px 14px', borderRadius: 8, border: `1px solid ${C.line}`,
-        fontSize: 13, fontFamily: 'monospace', outline: 'none', boxSizing: 'border-box', marginBottom: 10 }
+        fontSize: 13, fontFamily: 'monospace', outline: 'none', boxSizing: 'border-box', marginBottom: 10, color: C.ink, background: C.card }
     }),
     React.createElement('button', { onClick: apply, disabled: !input.trim(),
       style: { ...btn(input.trim() ? C.accent : C.line, 'white'), flex: 'unset', width: '100%', marginBottom: 28 }
@@ -1028,7 +1183,7 @@ function AddListForm({ onMerge, onClose }) {
         placeholder: 'Paste CSV/JSON here…',
         style: { width: '100%', height: 90, padding: 12, borderRadius: 8,
           border: `2px solid ${error ? C.wrong : C.line}`, fontSize: 12, resize: 'vertical',
-          outline: 'none', boxSizing: 'border-box' } }),
+          outline: 'none', boxSizing: 'border-box', color: C.ink, background: C.card } }),
       error && React.createElement('div', { style: { color: C.wrong, fontSize: 12, marginTop: 6 } }, error),
       text.trim() && React.createElement('button', { onClick: () => process(text), disabled: loading,
         style: { ...btn(C.accent, 'white'), flex: 'unset', width: '100%', marginTop: 10 }
@@ -1043,11 +1198,20 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
   const [editing, setEditing] = useState(null);
   const [search, setSearch] = useState('');
   const [activeFirst, setActiveFirst] = useState(false);
+  const [filter, setFilter] = useState('all'); // all | studied | mastered | new
   const studied = items.filter(it=>(progress[it.id]?.correct||0)+(progress[it.id]?.wrong||0)>0).length;
   const mastered = items.filter(it=>(progress[it.id]?.streak||0)>=masteryTarget).length;
+  const unseen = items.filter(it=>!(progress[it.id]?.correct||progress[it.id]?.wrong)).length;
 
   const q = search.trim().toLowerCase();
   const filtered = items.filter(it => {
+    // category filter
+    const p = progress[it.id] || {};
+    const total = (p.correct||0)+(p.wrong||0);
+    if (filter==='studied' && total===0) return false;
+    if (filter==='mastered' && (p.streak||0) < masteryTarget) return false;
+    if (filter==='new' && total>0) return false;
+    // search filter
     if (!q) return true;
     return it.word.toLowerCase().includes(q)
       || (it.reading||'').toLowerCase().includes(q)
@@ -1063,14 +1227,17 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
         onRemove:()=>{ onRemove(editing.id); setEditing(null); },
         onResetWord:()=>{ onResetWord(editing.id); setEditing(null); },
         onMarkMastered:()=>{ onMarkMastered(editing.id); setEditing(null); } })}
-      <div style={{ display:'flex', gap:10 }}>
-        {[['Total',items.length,C.ink],['Studied',studied,C.gold],['Mastered',mastered,C.correct]].map(([l,v,c])=>
-          React.createElement('div', { key:l, style:{ flex:1, textAlign:'center', padding:'12px 8px',
-            background:C.card, borderRadius:8, border:`1px solid ${C.line}` }},
-            React.createElement('div', { style:{ fontSize:24, fontWeight:700, color:c } }, v),
-            React.createElement('div', { style:{ fontSize:11, color:C.muted } }, l)
-          )
-        )}
+      <div style={{ display:'flex', gap:8 }}>
+        {[['Total','all',items.length,C.ink],['Studied','studied',studied,C.gold],['Mastered','mastered',mastered,C.correct],['New','new',unseen,C.muted]].map(([l,key,v,c])=>{
+          const on = filter===key;
+          return React.createElement('button', { key:l, onClick:()=>setFilter(on && key!=='all' ? 'all' : key),
+            style:{ flex:1, textAlign:'center', padding:'12px 4px', cursor:'pointer',
+              background: on ? c : C.card, borderRadius:8,
+              border:`2px solid ${on ? c : C.line}` }},
+            React.createElement('div', { style:{ fontSize:22, fontWeight:700, color: on ? 'white' : c } }, v),
+            React.createElement('div', { style:{ fontSize:10, color: on ? 'white' : C.muted } }, l)
+          );
+        })}
       </div>
       <div style={{ display:'flex', gap:10 }}>
         <button onClick={()=>setShowAdd(true)} style={{ ...btn(C.accent,'white') }}>+ Add word</button>
@@ -1082,7 +1249,7 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
         <input value={search} onChange={e=>setSearch(e.target.value)}
           placeholder="Search words, readings, meanings…"
           style={{ width:'100%', padding:'11px 36px 11px 14px', borderRadius:8,
-            border:`1px solid ${C.line}`, fontSize:14, outline:'none', boxSizing:'border-box', background:C.card }} />
+            border:`1px solid ${C.line}`, fontSize:14, outline:'none', boxSizing:'border-box', background:C.card, color:C.ink }} />
         {search && React.createElement('button', { onClick:()=>setSearch(''),
           style:{ position:'absolute', right:8, top:'50%', transform:'translateY(-50%)',
             background:'none', border:'none', color:C.muted, cursor:'pointer', fontSize:16 } }, '✕')}
@@ -1116,13 +1283,14 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
           const isMastered=streak>=masteryTarget;
           const inActive=activeIds.includes(item.id);
           return React.createElement('div', { key:item.id,
-            style:{ display:'flex', alignItems:'center', gap:8,
+            style:{ display:'flex', alignItems:'center', gap:10,
               background: isMastered ? C.softGreen : C.card,
               borderRadius:8, padding:'10px 12px',
               border:`1px solid ${inActive ? C.gold : (isMastered ? C.correct : C.line)}` }},
+            React.createElement('div', { style:{ fontSize:22, fontWeight:700, color:C.ink, lineHeight:1.25,
+              wordBreak:'break-all', maxWidth:'45%', flexShrink:0 } },
+              React.createElement(TappableKanji, { text:item.word, onTapKanji })),
             React.createElement('div', { style:{ flex:1, minWidth:0 } },
-              React.createElement('div', { style:{ fontSize:20, fontWeight:700, color:C.ink, lineHeight:1.3, wordBreak:'break-all' } },
-                React.createElement(TappableKanji, { text:item.word, onTapKanji })),
               React.createElement('div', { style:{ fontSize:12, color:C.muted, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' } },
                 React.createElement(KanaReading, { word:item.word, fallback:item.reading })),
               React.createElement('div', { style:{ fontSize:13, color:C.ink, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' } }, item.meanings[0])
@@ -1204,7 +1372,7 @@ function ImportScreen({ onImport, onAccount }) {
       <textarea value={text} onChange={e=>{ setText(e.target.value); setError(''); }}
         placeholder="Paste your LLN CSV/JSON export here…"
         style={{ width:'100%', height:110, padding:12, borderRadius:8,
-          border:`2px solid ${error?C.wrong:C.line}`, fontSize:12, resize:'vertical', outline:'none' }} />
+          border:`2px solid ${error?C.wrong:C.line}`, fontSize:12, resize:'vertical', outline:'none', color:C.ink, background:C.card }} />
       {error && <div style={{ color:C.wrong, fontSize:12, marginTop:6, padding:'8px 12px', background:C.softRed, borderRadius:8 }}>{error}</div>}
       {text.trim() && (
         <button onClick={()=>process(text)} disabled={loading}
@@ -1295,7 +1463,7 @@ function KanjiMode({ items, onTapWord }) {
       React.createElement('input', { value:search, onChange:e=>setSearch(e.target.value),
         placeholder:'Search a kanji…',
         style:{ width:'100%', padding:'11px 36px 11px 14px', borderRadius:8,
-          border:`1px solid ${C.line}`, fontSize:14, outline:'none', boxSizing:'border-box', background:C.card } }),
+          border:`1px solid ${C.line}`, fontSize:14, outline:'none', boxSizing:'border-box', background:C.card, color:C.ink } }),
       search && React.createElement('button', { onClick:()=>setSearch(''),
         style:{ position:'absolute', right:8, top:'50%', transform:'translateY(-50%)',
           background:'none', border:'none', color:C.muted, cursor:'pointer', fontSize:16 } }, '✕')
@@ -1340,6 +1508,7 @@ function App() {
   const [deckLoaded, setDeckLoaded] = useState(false);
   const currentWordRef = useRef(null);
   const [kanjiPopup, setKanjiPopup] = useState(null);
+  const [wordPopup, setWordPopup] = useState(null);
   const [theme, setTheme] = useState(loadTheme);
   const toggleTheme = () => {
     const next = theme === 'dark' ? 'light' : 'dark';
@@ -1564,6 +1733,8 @@ function App() {
       )
     ),
     kanjiPopup && React.createElement(KanjiPopup, { char:kanjiPopup, onClose:()=>setKanjiPopup(null), items }),
+    wordPopup && React.createElement(WordPopup, { token:wordPopup, onClose:()=>setWordPopup(null),
+      existing:items, onAdd:(w)=>handleAdd(w) }),
     React.createElement('div', { style:{ maxWidth:420, margin:'0 auto', padding:20 } },
       // Session controls bar (only on practice tabs)
       (mode==='write' || mode==='quiz') && React.createElement('div', {
@@ -1580,10 +1751,10 @@ function App() {
       ),
       mode==='write' && (deckEmpty
         ? React.createElement('div', { style:{ textAlign:'center', color:C.muted, padding:'40px 20px' } }, 'No active words. Add some in the Words tab.')
-        : React.createElement(WriteMode, { key:deck.length, items:deck, progress, onAnswer:handleAnswer, onCurrentWord:(id)=>{currentWordRef.current=id;}, onTapKanji:setKanjiPopup })),
+        : React.createElement(WriteMode, { key:deck.length, items:deck, progress, onAnswer:handleAnswer, onCurrentWord:(id)=>{currentWordRef.current=id;}, onTapKanji:setKanjiPopup, onTapWord:setWordPopup })),
       mode==='quiz' && (deckEmpty
         ? React.createElement('div', { style:{ textAlign:'center', color:C.muted, padding:'40px 20px' } }, 'No active words. Add some in the Words tab.')
-        : React.createElement(QuizMode, { key:deck.length, items:deck, progress, onAnswer:handleAnswer, onCurrentWord:(id)=>{currentWordRef.current=id;}, onTapKanji:setKanjiPopup })),
+        : React.createElement(QuizMode, { key:deck.length, items:deck, progress, onAnswer:handleAnswer, onCurrentWord:(id)=>{currentWordRef.current=id;}, onTapKanji:setKanjiPopup, onTapWord:setWordPopup })),
       mode==='words' && React.createElement(WordsMode, { items, progress, onRemove:handleRemove, onAdd:handleAdd, onEdit:handleEdit, onMerge:handleMerge, onResetWord:resetWord, onMarkMastered:markMastered, activeIds:activeIds||[], onAddToActive:addToActive, onRemoveFromActive:removeFromActive, masteryTarget, onTapKanji:setKanjiPopup }),
       mode==='kanji' && React.createElement(KanjiMode, { items })
     )
