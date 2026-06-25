@@ -290,6 +290,23 @@ async function storageSet(key, val) {
   supabaseSet(key, val, ts).finally(() => { delete pendingWrites[key]; });
 }
 
+// Returns a word's example sentences as an array of {ja, en}, migrating from
+// the older single sentence/sentenceEn fields on the fly. De-duplicates by ja.
+function getSentences(item) {
+  if (!item) return [];
+  const out = [];
+  const seen = new Set();
+  const push = (ja, en) => {
+    ja = (ja || '').trim();
+    if (!ja || seen.has(ja)) return;
+    seen.add(ja);
+    out.push({ ja, en: (en || '').trim() || null });
+  };
+  if (Array.isArray(item.sentences)) item.sentences.forEach(s => push(s.ja, s.en));
+  if (item.sentence) push(item.sentence, item.sentenceEn); // legacy single
+  return out;
+}
+
 function parseLLN(raw) {
   try {
     if (raw.includes("WORD|") && raw.includes("\t")) {
@@ -312,6 +329,27 @@ function parseLLN(raw) {
     }
     const arr = JSON.parse(raw);
     if (!Array.isArray(arr)) return null;
+    // Already in this app's flat format: [{ word, reading, meanings:[...], sentence, sentenceEn, sentences? }]
+    if (arr.length && arr[0] && typeof arr[0].word === 'string' && Array.isArray(arr[0].meanings)) {
+      const out = arr.filter(it => it.word && (it.meanings||[]).length).map((it, i) => {
+        const w = {
+          id: it.id || `import-${it.word}-${i}`,
+          word: String(it.word).trim(),
+          reading: (it.reading || '').trim(),
+          meanings: it.meanings.map(m => String(m).trim()).filter(Boolean),
+          sentence: it.sentence || null,
+          sentenceEn: it.sentenceEn || null,
+        };
+        if (Array.isArray(it.sentences)) {
+          w.sentences = it.sentences
+            .filter(s => s && s.ja)
+            .map(s => ({ ja: String(s.ja).trim(), en: (s.en || '').trim() || null }));
+        }
+        return w;
+      });
+      return out.length > 0 ? out : null;
+    }
+    // Language Reactor JSON format
     const out = arr.filter(item => item.word && item.word.text).map(item => {
       const phrase = item.context && item.context.phrase;
       const subtitles = (phrase && phrase.subtitles) || {};
@@ -644,6 +682,22 @@ function SentenceDisplay({ sentence, sentenceEn, word, reading, showEn, onTapKan
   );
 }
 
+// Renders all of a word's example sentences, stacked with dividers.
+function SentenceList({ item, word, reading, showEn, onTapKanji, onTapWord }) {
+  const sentences = getSentences(item);
+  if (!sentences.length) return null;
+  return React.createElement('div', { style: { display: 'flex', flexDirection: 'column' } },
+    sentences.map((s, i) =>
+      React.createElement('div', { key: i, style: {
+        paddingTop: i === 0 ? 0 : 12, marginTop: i === 0 ? 0 : 12,
+        borderTop: i === 0 ? 'none' : `1px solid ${C.line}` } },
+        React.createElement(SentenceDisplay, { sentence: s.ja, sentenceEn: s.en,
+          word, reading, showEn, onTapKanji, onTapWord })
+      )
+    )
+  );
+}
+
 function StrokeOrder({ word }) {
   return React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' } },
     [...word].map((char, i) => {
@@ -841,14 +895,16 @@ function WordPopup({ token, onClose, onAdd, existing }) {
 
   const doAdd = () => {
     const meanings = allMeanings.slice(0, 4);
-    const firstEx = (info && info.examples && info.examples[0]) || null;
+    const exs = (info && info.examples ? info.examples : []).slice(0, 3)
+      .filter(e => e && e.ja).map(e => ({ ja: e.ja, en: e.en || null }));
     onAdd({
       id: `sentence-${lookup}-${Date.now()}`,
       word: lookup,
       reading: reading,
       meanings: meanings.length ? meanings : ['(add meaning)'],
-      sentence: firstEx ? firstEx.ja : null,
-      sentenceEn: firstEx ? (firstEx.en || null) : null,
+      sentences: exs,
+      sentence: exs[0] ? exs[0].ja : null,
+      sentenceEn: exs[0] ? exs[0].en : null,
     });
     setAdded(true);
   };
@@ -1075,10 +1131,9 @@ function WriteMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTap
             </div>
             <StrokeOrder word={item.word} />
           </div>
-          {item.sentence && (
+          {getSentences(item).length > 0 && (
             <div style={{ background:C.paperDark, borderRadius:8, padding:'12px 14px', width:'100%' }}>
-              <SentenceDisplay sentence={item.sentence} sentenceEn={item.sentenceEn}
-                word={item.word} reading={item.reading} showEn={true} onTapKanji={onTapKanji} onTapWord={onTapWord} />
+              <SentenceList item={item} word={item.word} reading={item.reading} showEn={true} onTapKanji={onTapKanji} onTapWord={onTapWord} />
             </div>
           )}
         </div>
@@ -1120,8 +1175,9 @@ function QuizMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTapW
     onAdvance();
   };
 
-  // Show the example sentence as a hint, or fully once revealed
-  const showSentence = (hint || revealed) && item.sentence;
+  // Show the example sentence(s) as a hint, or fully once revealed
+  const hasSentence = getSentences(item).length > 0;
+  const showSentence = (hint || revealed) && hasSentence;
 
   return (
     <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
@@ -1142,18 +1198,17 @@ function QuizMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTapW
 
       {showSentence && (
         <div style={{ background:C.paperDark, borderRadius:8, padding:'12px 16px' }}>
-          {React.createElement(SentenceDisplay, { sentence:item.sentence, sentenceEn:item.sentenceEn,
-            word:item.word, reading:item.reading, showEn:revealed, onTapKanji:onTapKanji, onTapWord:onTapWord })}
+          {React.createElement(SentenceList, { item, word:item.word, reading:item.reading, showEn:revealed, onTapKanji:onTapKanji, onTapWord:onTapWord })}
         </div>
       )}
 
       {!revealed ? (
         <div style={{ display:'flex', gap:10, width:'100%' }}>
-          <button onClick={() => setHint(true)} disabled={hint || !item.sentence}
+          <button onClick={() => setHint(true)} disabled={hint || !hasSentence}
             style={{ ...btn(C.card, C.ink), border:`1px solid ${C.line}`,
-              opacity: (hint || !item.sentence) ? 0.5 : 1,
-              cursor: (hint || !item.sentence) ? 'default' : 'pointer' }}>
-            {item.sentence ? (hint ? 'Hint shown' : 'Hint') : 'No hint'}
+              opacity: (hint || !hasSentence) ? 0.5 : 1,
+              cursor: (hint || !hasSentence) ? 'default' : 'pointer' }}>
+            {hasSentence ? (hint ? 'Hint shown' : 'Hint') : 'No hint'}
           </button>
           <button onClick={() => setRevealed(true)} style={{ ...btn(C.accent,'white'), flex:2 }}>Reveal</button>
         </div>
@@ -1195,9 +1250,21 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
   const submit = () => {
     if (!word.trim()) { setError('Word is required'); return; }
     if (!meanings.trim()) { setError('At least one meaning is required'); return; }
+    const ja = sentence.trim(), en = sentenceEn.trim();
+    const existing = isEdit ? getSentences(editItem) : [];
+    const rest = existing.slice(1); // everything after the first stays as-is
+    let sentences;
+    if (ja) {
+      // form field becomes the first sentence; keep the others (de-duped against it)
+      sentences = [{ ja, en: en || null }, ...rest.filter(s => s.ja !== ja)];
+    } else {
+      sentences = rest; // first sentence cleared → keep the rest
+    }
     onAdd({ id: isEdit ? editItem.id : `manual-${word.trim()}-${Date.now()}`, word:word.trim(), reading:reading.trim(),
       meanings:meanings.split(',').map(m=>m.trim()).filter(Boolean),
-      sentence:sentence.trim()||null, sentenceEn:sentenceEn.trim()||null });
+      sentences,
+      sentence: sentences[0] ? sentences[0].ja : null,
+      sentenceEn: sentences[0] ? sentences[0].en : null });
     onClose();
   };
 
@@ -1232,15 +1299,22 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
   );
 
   // View mode body: meaning, reading, clickable example sentence with furigana
+  const viewSentences = isEdit ? getSentences(editItem) : [];
   const viewBody = isEdit && React.createElement('div', null,
     React.createElement('div', { style:{ fontSize:13, color:C.muted, marginBottom:14, lineHeight:1.6 } },
       (editItem.meanings||[]).join(', ')),
-    editItem.sentence && React.createElement('div', { style:{ background:C.paperDark, borderRadius:8, padding:'12px 14px', marginBottom:6 } },
-      React.createElement('div', { style:{ fontSize:16, color:C.ink, lineHeight:2 } },
-        onTapWord
-          ? React.createElement(TappableSentence, { sentence:editItem.sentence, onTapWord })
-          : React.createElement(FuriganaSentence, { sentence:editItem.sentence })),
-      editItem.sentenceEn && React.createElement('div', { style:{ fontSize:12, color:C.muted, marginTop:6, lineHeight:1.5 } }, editItem.sentenceEn)
+    viewSentences.length > 0 && React.createElement('div', { style:{ background:C.paperDark, borderRadius:8, padding:'12px 14px', marginBottom:6 } },
+      viewSentences.map((s, i) =>
+        React.createElement('div', { key:i, style:{
+          paddingTop: i===0?0:12, marginTop: i===0?0:12,
+          borderTop: i===0?'none':`1px solid ${C.line}` } },
+          React.createElement('div', { style:{ fontSize:16, color:C.ink, lineHeight:2 } },
+            onTapWord
+              ? React.createElement(TappableSentence, { sentence:s.ja, onTapWord })
+              : React.createElement(FuriganaSentence, { sentence:s.ja })),
+          s.en && React.createElement('div', { style:{ fontSize:12, color:C.muted, marginTop:6, lineHeight:1.5 } }, s.en)
+        )
+      )
     )
   );
 
@@ -1423,9 +1497,15 @@ function AddListForm({ onMerge, onClose }) {
       const parsed = parseLLN(raw);
       setLoading(false);
       if (!parsed) { setError("Couldn't read this — make sure it's a Language Reactor CSV or JSON export."); return; }
-      const added = onMerge(parsed);
+      const result = onMerge(parsed);
+      const added = typeof result === 'object' ? result.added : result;
+      const enriched = typeof result === 'object' ? result.enriched : 0;
       onClose();
-      setTimeout(() => alert(`Added ${added} new word${added === 1 ? '' : 's'}.`), 100);
+      setTimeout(() => {
+        let msg = `Added ${added} new word${added === 1 ? '' : 's'}.`;
+        if (enriched > 0) msg += `\nAdded example sentences to ${enriched} existing word${enriched === 1 ? '' : 's'}.`;
+        alert(msg);
+      }, 100);
     }, 50);
   };
 
@@ -1950,18 +2030,49 @@ function App() {
 
   const handleImport = parsed => { setItems(parsed); storageSet(WORDS_KEY, parsed); setActiveIds(null); storageSet(DECK_KEY, null); };
   const handleMerge = parsed => {
-    let added = 0;
+    let added = 0, enriched = 0;
     setItems(prev => {
       const existing = prev || [];
+      const byWord = new Map(existing.map(it => [it.word, it]));
       const existingIds = new Set(existing.map(it => it.id));
-      const existingWords = new Set(existing.map(it => it.word));
-      const newOnes = parsed.filter(it => !existingIds.has(it.id) && !existingWords.has(it.word));
-      added = newOnes.length;
-      const next = [...existing, ...newOnes];
+      const next = existing.map(it => ({ ...it })); // shallow copies so we can mutate sentences
+
+      parsed.forEach(incoming => {
+        const dupById = existingIds.has(incoming.id);
+        const match = byWord.get(incoming.word);
+        if (match || dupById) {
+          // Duplicate word: merge its example sentences into the existing entry
+          const target = match || next.find(it => it.id === incoming.id);
+          if (!target) return;
+          const current = getSentences(target);
+          const incomingS = getSentences(incoming);
+          const seen = new Set(current.map(s => s.ja));
+          let changed = false;
+          incomingS.forEach(s => { if (!seen.has(s.ja)) { current.push(s); seen.add(s.ja); changed = true; } });
+          if (changed) {
+            target.sentences = current;
+            // keep legacy fields pointed at the first sentence for any old readers
+            target.sentence = current[0] ? current[0].ja : null;
+            target.sentenceEn = current[0] ? current[0].en : null;
+            enriched++;
+          }
+        } else {
+          // Brand new word — normalize to the sentences[] shape
+          const sents = getSentences(incoming);
+          const w = { ...incoming, sentences: sents,
+            sentence: sents[0] ? sents[0].ja : null,
+            sentenceEn: sents[0] ? sents[0].en : null };
+          next.push(w);
+          byWord.set(w.word, w);
+          existingIds.add(w.id);
+          added++;
+        }
+      });
+
       storageSet(WORDS_KEY, next);
       return next;
     });
-    return added;
+    return { added, enriched };
   };
   const handleAnswer = (id, correct) => {
     setProgress(prev => {
