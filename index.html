@@ -1291,9 +1291,33 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
   const isEdit = !!editItem;
   // For an existing word: start in "view" mode; for a new word: straight to the form
   const [editingFields, setEditingFields] = useState(!isEdit);
+  // Local copy of sentences so newly-added ones show immediately without closing
+  const [localSentences, setLocalSentences] = useState(isEdit ? getSentences(editItem) : []);
+  const [addingSentence, setAddingSentence] = useState(false);
+  const [newJa, setNewJa] = useState('');
+  const [newEn, setNewEn] = useState('');
   const ep = (editItem && progress && progress[editItem.id]) || { correct:0, wrong:0, streak:0 };
   const hasProgress = (ep.correct||0)+(ep.wrong||0) > 0;
   const isMastered = (ep.streak||0) >= (masteryTarget||5);
+
+  const saveSentences = (sentences) => {
+    onAdd({ ...editItem, sentences,
+      sentence: sentences[0] ? sentences[0].ja : null,
+      sentenceEn: sentences[0] ? sentences[0].en : null });
+  };
+  const addSentence = () => {
+    const ja = newJa.trim(); if (!ja) return;
+    if (localSentences.some(s => s.ja === ja)) { setNewJa(''); setNewEn(''); setAddingSentence(false); return; }
+    const next = [...localSentences, { ja, en: newEn.trim() || null }];
+    setLocalSentences(next);
+    saveSentences(next);
+    setNewJa(''); setNewEn(''); setAddingSentence(false);
+  };
+  const removeSentence = (idx) => {
+    const next = localSentences.filter((_, i) => i !== idx);
+    setLocalSentences(next);
+    saveSentences(next);
+  };
 
   const submit = () => {
     if (!word.trim()) { setError('Word is required'); return; }
@@ -1346,24 +1370,48 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
     }, 'Delete')
   );
 
-  // View mode body: meaning, reading, clickable example sentence with furigana
-  const viewSentences = isEdit ? getSentences(editItem) : [];
+  // View mode body: meaning, reading, example sentences (with add/remove)
   const viewBody = isEdit && React.createElement('div', null,
     React.createElement('div', { style:{ fontSize:13, color:C.muted, marginBottom:14, lineHeight:1.6 } },
       (editItem.meanings||[]).join(', ')),
-    viewSentences.length > 0 && React.createElement('div', { style:{ background:C.paperDark, borderRadius:8, padding:'12px 14px', marginBottom:6 } },
-      viewSentences.map((s, i) =>
+    localSentences.length > 0 && React.createElement('div', { style:{ background:C.paperDark, borderRadius:8, padding:'12px 14px', marginBottom:10 } },
+      localSentences.map((s, i) =>
         React.createElement('div', { key:i, style:{
           paddingTop: i===0?0:12, marginTop: i===0?0:12,
-          borderTop: i===0?'none':`1px solid ${C.line}` } },
-          React.createElement('div', { style:{ fontSize:16, color:C.ink, lineHeight:2 } },
-            onTapWord
-              ? React.createElement(TappableSentence, { sentence:s.ja, onTapWord })
-              : React.createElement(FuriganaSentence, { sentence:s.ja })),
-          s.en && React.createElement('div', { style:{ fontSize:12, color:C.muted, marginTop:6, lineHeight:1.5 } }, s.en)
+          borderTop: i===0?'none':`1px solid ${C.line}`,
+          display:'flex', alignItems:'flex-start', gap:8 } },
+          React.createElement('div', { style:{ flex:1, minWidth:0 } },
+            React.createElement('div', { style:{ fontSize:16, color:C.ink, lineHeight:2 } },
+              onTapWord
+                ? React.createElement(TappableSentence, { sentence:s.ja, onTapWord })
+                : React.createElement(FuriganaSentence, { sentence:s.ja })),
+            s.en && React.createElement('div', { style:{ fontSize:12, color:C.muted, marginTop:6, lineHeight:1.5 } }, s.en)
+          ),
+          React.createElement('button', { onClick:()=>removeSentence(i), title:'Remove this sentence',
+            style:{ background:'none', border:'none', color:C.muted, cursor:'pointer', fontSize:15, flexShrink:0, padding:'2px 4px' } }, '✕')
         )
       )
-    )
+    ),
+    // Add-sentence inline form / button
+    addingSentence
+      ? React.createElement('div', { style:{ border:`1px solid ${C.line}`, borderRadius:8, padding:12, marginBottom:6 } },
+          React.createElement('input', { value:newJa, onChange:e=>setNewJa(e.target.value),
+            placeholder:'Japanese sentence',
+            style:{ width:'100%', padding:'9px 11px', borderRadius:6, border:`1px solid ${C.line}`,
+              fontSize:15, outline:'none', boxSizing:'border-box', color:C.ink, background:C.card, marginBottom:8 } }),
+          React.createElement('input', { value:newEn, onChange:e=>setNewEn(e.target.value),
+            placeholder:'Translation (optional)',
+            style:{ width:'100%', padding:'9px 11px', borderRadius:6, border:`1px solid ${C.line}`,
+              fontSize:14, outline:'none', boxSizing:'border-box', color:C.ink, background:C.card, marginBottom:10 } }),
+          React.createElement('div', { style:{ display:'flex', gap:8 } },
+            React.createElement('button', { onClick:()=>{ setAddingSentence(false); setNewJa(''); setNewEn(''); },
+              style:{ ...btn(C.line, C.ink), padding:'8px 12px' } }, 'Cancel'),
+            React.createElement('button', { onClick:addSentence, disabled:!newJa.trim(),
+              style:{ ...btn(newJa.trim()?C.accent:C.line, 'white'), padding:'8px 12px' } }, 'Add sentence')
+          )
+        )
+      : React.createElement('button', { onClick:()=>setAddingSentence(true),
+          style:{ ...btn(C.card, C.accent), border:`1px dashed ${C.accent}`, padding:'9px 12px', width:'100%' } }, '+ Add sentence')
   );
 
   // Editable form body

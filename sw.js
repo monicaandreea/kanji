@@ -1,6 +1,6 @@
 // Service worker for 漢字 Practice — enables offline use.
 // Bump CACHE_VERSION whenever you want to force-refresh cached files.
-const CACHE_VERSION = 'kanji-v7';
+const CACHE_VERSION = 'kanji-v8';
 const CORE_ASSETS = [
   './',
   './index.html',
