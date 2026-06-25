@@ -1223,7 +1223,7 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
         cursor: isMastered ? 'default' : 'pointer', fontSize:12, fontWeight:600 }
     }, isMastered ? '✓ Mastered' : 'Mark mastered'),
     React.createElement('button', {
-      onClick: () => { if (hasProgress && confirm(`Reset progress for "${editItem.word}"?`)) onResetWord(); },
+      onClick: () => { if (hasProgress) onResetWord(); },
       disabled: !hasProgress,
       style:{ padding:'10px 6px', borderRadius:8, border:`1px solid ${hasProgress?C.gold:C.line}`,
         background:'transparent', color: hasProgress?C.gold:C.line,
@@ -1490,7 +1490,7 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
   const [search, setSearch] = useState('');
   const [activeFirst, setActiveFirst] = useState(false);
   const [filter, setFilter] = useState('all'); // all | studied | mastered | new
-  const studied = items.filter(it=>(progress[it.id]?.correct||0)+(progress[it.id]?.wrong||0)>0).length;
+  const studied = items.filter(it=>{ const p=progress[it.id]||{}; return (p.correct||0)+(p.wrong||0)>0 && (p.streak||0)<masteryTarget; }).length;
   const mastered = items.filter(it=>(progress[it.id]?.streak||0)>=masteryTarget).length;
   const unseen = items.filter(it=>!(progress[it.id]?.correct||progress[it.id]?.wrong)).length;
 
@@ -1499,8 +1499,9 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
     // category filter
     const p = progress[it.id] || {};
     const total = (p.correct||0)+(p.wrong||0);
-    if (filter==='studied' && total===0) return false;
-    if (filter==='mastered' && (p.streak||0) < masteryTarget) return false;
+    const isMastered = (p.streak||0) >= masteryTarget;
+    if (filter==='studied' && (total===0 || isMastered)) return false;
+    if (filter==='mastered' && !isMastered) return false;
     if (filter==='new' && total>0) return false;
     // search filter
     if (!q) return true;
@@ -1519,7 +1520,7 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
         onResetWord:()=>{ onResetWord(editing.id); setEditing(null); },
         onMarkMastered:()=>{ onMarkMastered(editing.id); setEditing(null); } })}
       <div style={{ display:'flex', gap:8 }}>
-        {[['Total','all',items.length,C.ink],['Studied','studied',studied,C.gold],['Mastered','mastered',mastered,C.correct],['New','new',unseen,C.muted]].map(([l,key,v,c])=>{
+        {[['Total','all',items.length,C.ink],['Studying','studied',studied,C.gold],['Mastered','mastered',mastered,C.correct],['New','new',unseen,C.muted]].map(([l,key,v,c])=>{
           const on = filter===key;
           return React.createElement('button', { key:l, onClick:()=>setFilter(on && key!=='all' ? 'all' : key),
             style:{ flex:1, textAlign:'center', padding:'12px 4px', cursor:'pointer',
