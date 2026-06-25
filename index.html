@@ -155,16 +155,16 @@ const { useState, useEffect, useRef } = React;
 
 const LIGHT = {
   ink: "#2e1a3e", paper: "#f7f4ee", paperDark: "#ede9e0",
-  muted: "#8a8478", line: "#d4cfc4", correct: "#2d6a4f",
-  wrong: "#c0392b", gold: "#9b7fc4", card: "#ffffff",
-  softGreen: "#f0f7f2", softGreenBright: "#e8f5e9", softRed: "#fdecea",
+  muted: "#8a8478", line: "#d4cfc4", correct: "#d6699a",
+  wrong: "#7d2348", gold: "#9b7fc4", card: "#ffffff",
+  softGreen: "#fdf0f5", softGreenBright: "#fce4ee", softRed: "#f3dae0",
   accent: "#2e1a3e", header: "#2e1a3e",
 };
 const DARK = {
   ink: "#e8def5", paper: "#1a1320", paperDark: "#241a2e",
-  muted: "#9a8fa8", line: "#3a2f47", correct: "#3a8f63",
-  wrong: "#b04a4a", gold: "#b89ad8", card: "#241a2e",
-  softGreen: "#1e2e24", softGreenBright: "#1e3a2a", softRed: "#3a2020",
+  muted: "#9a8fa8", line: "#3a2f47", correct: "#f0a0c0",
+  wrong: "#c25575", gold: "#b89ad8", card: "#241a2e",
+  softGreen: "#3a2230", softGreenBright: "#4a2838", softRed: "#3a1f28",
   accent: "#6b4a8f", header: "#2a1d38",
 };
 const THEME_KEY = "kanji-theme";
@@ -1032,8 +1032,7 @@ function btn(bg, color, extra) {
     background: bg, color, fontSize: 14, cursor: 'pointer', fontWeight: 600, ...(extra||{}) };
 }
 
-function WriteMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTapWord }) {
-  const [idx, setIdx] = useState(0);
+function WriteMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTapWord, idx, onAdvance }) {
   const [phase, setPhase] = useState('write');
   const [clearTrigger, setClearTrigger] = useState(0);
 
@@ -1042,6 +1041,8 @@ function WriteMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTap
   const p = progress[item.id] || { correct: 0, wrong: 0 };
 
   React.useEffect(() => { onCurrentWord && onCurrentWord(item.id); }, [item.id]);
+  // Reset to write phase whenever the card changes (e.g. returning to the tab)
+  React.useEffect(() => { setPhase('write'); }, [item.id]);
 
   const reveal = () => setPhase('reveal');
   const clear = () => setClearTrigger(t => t + 1);
@@ -1050,7 +1051,7 @@ function WriteMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTap
     onAnswer(item.id, correct);
     setClearTrigger(t => t + 1);
     setPhase('write');
-    setIdx(i => (i + 1) % items.length);
+    onAdvance();
   };
 
   return (
@@ -1095,87 +1096,68 @@ function WriteMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTap
   );
 }
 
-function QuizMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTapWord }) {
-  const snapshotRef = useRef(null);
-  useEffect(() => { snapshotRef.current = [...items]; }, []);
+function QuizMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTapWord, idx, onAdvance }) {
+  const [revealed, setRevealed] = useState(false);
+  const [hint, setHint] = useState(false);
 
-  const [idx, setIdx] = useState(0);
-  const [choices, setChoices] = useState([]);
-  const [picked, setPicked] = useState(null);
-  const answeredRef = useRef(false);
-
-  const snapshot = snapshotRef.current || items;
-  const item = snapshot[Math.min(idx, snapshot.length-1)] || snapshot[0];
-  const p = progress[item.id] || { correct:0, wrong:0 };
-  const revealed = picked !== null;
-  const correct = item.meanings[0];
+  const safeIdx = Math.min(idx, items.length - 1);
+  const item = items[safeIdx];
+  const p = progress[item.id] || { correct: 0, wrong: 0 };
 
   React.useEffect(() => { onCurrentWord && onCurrentWord(item.id); }, [item.id]);
+  // Reset reveal/hint whenever we move to a new card
+  React.useEffect(() => { setRevealed(false); setHint(false); }, [item.id]);
 
-  useEffect(() => {
-    const card = snapshot[idx]; if (!card) return;
-    const others = snapshot.filter((_,i)=>i!==idx).sort(()=>Math.random()-0.5).slice(0,3).map(it=>it.meanings[0]);
-    setChoices([...others, card.meanings[0]].sort(()=>Math.random()-0.5));
-    setPicked(null); answeredRef.current = false;
-  }, [idx]);
-
-  const answer = (e, choice) => {
-    e.preventDefault(); e.stopPropagation();
-    if (answeredRef.current) return;
-    answeredRef.current = true;
-    setPicked(choice);
-    onAnswer(item.id, choice === correct);
+  const grade = (correct) => {
+    onAnswer(item.id, correct);
+    setRevealed(false);
+    setHint(false);
+    onAdvance();
   };
 
-  const next = e => {
-    e.preventDefault(); e.stopPropagation();
-    setIdx(i => (i+1) % snapshot.length);
-  };
+  // Show the example sentence as a hint, or fully once revealed
+  const showSentence = (hint || revealed) && item.sentence;
 
   return (
     <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
-      <div style={{ textAlign:'center', minHeight:90 }}>
-        <div style={{ fontSize:64, fontWeight:700, letterSpacing:4, color:C.ink, lineHeight:1 }}>
+      <div style={{ textAlign:'center' }}>
+        <div style={{ fontSize:12, color:C.muted, textTransform:'uppercase', letterSpacing:2, marginBottom:10 }}>What does this mean?</div>
+        <div style={{ fontSize:60, fontWeight:700, letterSpacing:4, color:C.ink, lineHeight:1.2, paddingBottom:8 }}>
           <TappableKanji text={item.word} onTapKanji={onTapKanji} />
         </div>
-        {revealed && <div style={{ fontSize:15, color:C.muted, marginTop:4 }}><KanaReading word={item.word} fallback={item.reading} /></div>}
-        <div style={{ fontSize:11, color:C.muted, marginTop:4 }}>✓ {p.correct} · ✗ {p.wrong}</div>
+        {revealed && <div style={{ fontSize:15, color:C.muted, marginTop:2 }}><KanaReading word={item.word} fallback={item.reading} /></div>}
+        <div style={{ fontSize:11, color:C.muted, marginTop:10 }}>✓ {p.correct} · ✗ {p.wrong}</div>
       </div>
-      <div style={{ minHeight:60, background:C.paperDark, borderRadius:8, padding:'12px 16px' }}>
-        {item.sentence
-          ? React.createElement(SentenceDisplay, { sentence:item.sentence, sentenceEn:item.sentenceEn,
-              word:item.word, reading:item.reading, showEn:revealed, onTapKanji:onTapKanji, onTapWord:onTapWord })
-          : React.createElement('span', { style:{ color:C.muted, fontSize:12 } }, 'No example sentence')}
-      </div>
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
-        {choices.map(choice => {
-          const isCorrect = choice === correct, isPicked = choice === picked;
-          let bg=C.card, border=C.line, color=C.ink;
-          if (revealed) {
-            if (isCorrect) { bg=C.softGreenBright; border=C.correct; color=C.correct; }
-            else if (isPicked) { bg=C.softRed; border=C.wrong; color=C.wrong; }
-          }
-          return React.createElement('button', {
-            key: choice,
-            onPointerDown: e => answer(e, choice),
-            style: { padding:'14px 8px', borderRadius:8, border:`2px solid ${border}`,
-              background:bg, color, fontSize:14, fontWeight:revealed&&isCorrect?700:400,
-              cursor:revealed?'default':'pointer', transition:'background 0.15s, border-color 0.15s',
-              WebkitTapHighlightColor:'transparent', userSelect:'none' }
-          }, choice + (revealed&&isCorrect?' ✓':'') + (revealed&&isPicked&&!isCorrect?' ✗':''));
-        })}
-      </div>
-      <div style={{ minHeight:52 }}>
-        {revealed
-          ? React.createElement('button', {
-              onPointerDown: next,
-              style: { width:'100%', padding:'14px', borderRadius:8, border:'none',
-                background: picked===correct?C.correct:C.wrong,
-                color:'white', fontSize:15, fontWeight:700, cursor:'pointer',
-                WebkitTapHighlightColor:'transparent' }
-            }, picked===correct ? 'Correct! → Next' : `Answer: ${correct} → Next`)
-          : React.createElement('div', { style:{ height:52 } })}
-      </div>
+
+      {revealed && (
+        <div style={{ textAlign:'center', background:C.softGreen, borderRadius:8, padding:'14px 16px' }}>
+          <div style={{ fontSize:20, fontWeight:600, color:C.ink }}>{item.meanings.join(', ')}</div>
+        </div>
+      )}
+
+      {showSentence && (
+        <div style={{ background:C.paperDark, borderRadius:8, padding:'12px 16px' }}>
+          {React.createElement(SentenceDisplay, { sentence:item.sentence, sentenceEn:item.sentenceEn,
+            word:item.word, reading:item.reading, showEn:revealed, onTapKanji:onTapKanji, onTapWord:onTapWord })}
+        </div>
+      )}
+
+      {!revealed ? (
+        <div style={{ display:'flex', gap:10, width:'100%' }}>
+          <button onClick={() => setHint(true)} disabled={hint || !item.sentence}
+            style={{ ...btn(C.card, C.ink), border:`1px solid ${C.line}`,
+              opacity: (hint || !item.sentence) ? 0.5 : 1,
+              cursor: (hint || !item.sentence) ? 'default' : 'pointer' }}>
+            {item.sentence ? (hint ? 'Hint shown' : 'Hint') : 'No hint'}
+          </button>
+          <button onClick={() => setRevealed(true)} style={{ ...btn(C.accent,'white'), flex:2 }}>Reveal</button>
+        </div>
+      ) : (
+        <div style={{ display:'flex', gap:10, width:'100%' }}>
+          <button onClick={() => grade(false)} style={btn(C.wrong,'white')}>✗ Wrong</button>
+          <button onClick={() => grade(true)} style={btn(C.correct,'white')}>✓ Correct</button>
+        </div>
+      )}
     </div>
   );
 }
@@ -1535,7 +1517,7 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
         onResetWord:()=>{ onResetWord(editing.id); setEditing(null); },
         onMarkMastered:()=>{ onMarkMastered(editing.id); setEditing(null); } })}
       <div style={{ display:'flex', gap:8 }}>
-        {[['Total','all',items.length,C.ink],['Studying','studied',studied,C.gold],['Mastered','mastered',mastered,C.correct],['New','new',unseen,C.muted]].map(([l,key,v,c])=>{
+        {[['Total','all',items.length,C.accent],['Studying','studied',studied,C.gold],['Mastered','mastered',mastered,C.correct],['New','new',unseen,C.muted]].map(([l,key,v,c])=>{
           const on = filter===key;
           return React.createElement('button', { key:l, onClick:()=>setFilter(on && key!=='all' ? 'all' : key),
             style:{ flex:1, textAlign:'center', padding:'12px 4px', cursor:'pointer',
@@ -1619,15 +1601,19 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
                       React.createElement('div', { style:{ color:C.muted } }, `${pct}%`)
                     )
             ),
-            // Active-deck toggle
-            React.createElement('button', {
-              onClick:()=> inActive ? onRemoveFromActive(item.id) : onAddToActive(item.id),
-              title: inActive ? 'In active set — tap to remove' : 'Add to active set',
-              style:{ background: inActive ? C.gold : 'none', border:`1px solid ${inActive ? C.gold : C.line}`,
-                color: inActive ? 'white' : C.muted, cursor:'pointer', fontSize:14,
-                width:26, height:26, borderRadius:6, flexShrink:0, lineHeight:1,
-                display:'flex', alignItems:'center', justifyContent:'center', padding:0 }
-            }, inActive ? '✓' : '+'),
+            // Active-deck toggle — hidden for mastered words (reset to re-add)
+            isMastered
+              ? React.createElement('div', { title:'Mastered — reset to add back to active set',
+                  style:{ width:26, height:26, flexShrink:0, display:'flex', alignItems:'center',
+                    justifyContent:'center', color:C.correct, fontSize:14 } }, '✓')
+              : React.createElement('button', {
+                  onClick:()=> inActive ? onRemoveFromActive(item.id) : onAddToActive(item.id),
+                  title: inActive ? 'In active set — tap to remove' : 'Add to active set',
+                  style:{ background: inActive ? C.gold : 'none', border:`1px solid ${inActive ? C.gold : C.line}`,
+                    color: inActive ? 'white' : C.muted, cursor:'pointer', fontSize:14,
+                    width:26, height:26, borderRadius:6, flexShrink:0, lineHeight:1,
+                    display:'flex', alignItems:'center', justifyContent:'center', padding:0 }
+                }, inActive ? '✓' : '+'),
             React.createElement('button', {
               onClick:()=>setEditing(item),
               title:'View word',
@@ -1877,6 +1863,8 @@ function App() {
   const [deckLoaded, setDeckLoaded] = useState(false);
   const currentWordRef = useRef(null);
   const shuffledOrderRef = useRef(null);
+  const touchStartRef = useRef(null);
+  const [deckIdx, setDeckIdx] = useState(0); // position in the active deck, shared across Write/Quiz and tab switches
   const [kanjiPopup, setKanjiPopup] = useState(null);
   const [wordPopup, setWordPopup] = useState(null);
   const [theme, setTheme] = useState(loadTheme);
@@ -2015,6 +2003,8 @@ function App() {
     });
   };
   const addToActive = id => {
+    // Don't allow adding mastered words to the active set (reset them first)
+    if ((progress[id]?.streak||0) >= masteryTarget) return;
     setActiveIds(prev => {
       const cur = prev || [];
       if (cur.includes(id)) return cur;
@@ -2099,6 +2089,33 @@ function App() {
   }
   const deck = shuffledOrderRef.current.map(id => idToItem[id]).filter(Boolean);
   const deckEmpty = deck.length === 0;
+  // Advance to the next card in the active deck, wrapping around. Lives in App
+  // so the position survives tab switches and is shared between Write & Quiz.
+  const advanceDeck = () => { setDeckIdx(i => deck.length ? (i + 1) % deck.length : 0); };
+
+  // Swipe between main tabs (left/right). Account (⚙) is excluded — it's an overlay.
+  const swipeTabs = ['write','quiz','words','read','kanji'];
+  const onTouchStart = (e) => {
+    // Ignore swipes that begin on the drawing canvas (so writing doesn't switch tabs)
+    if (e.target && e.target.tagName === 'CANVAS') { touchStartRef.current = null; return; }
+    const t = e.touches && e.touches[0];
+    touchStartRef.current = t ? { x: t.clientX, y: t.clientY } : null;
+  };
+  const onTouchEnd = (e) => {
+    const start = touchStartRef.current;
+    touchStartRef.current = null;
+    if (!start) return;
+    const t = e.changedTouches && e.changedTouches[0];
+    if (!t) return;
+    const dx = t.clientX - start.x, dy = t.clientY - start.y;
+    // Require a mostly-horizontal swipe of decent length
+    if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+    const cur = swipeTabs.indexOf(mode);
+    if (cur === -1) return;
+    const nextIdx = dx < 0 ? cur + 1 : cur - 1; // swipe left → next tab
+    if (nextIdx < 0 || nextIdx >= swipeTabs.length) return;
+    setMode(swipeTabs[nextIdx]);
+  };
 
   const masteredCount = items.filter(it => (progress[it.id]?.streak||0) >= masteryTarget).length;
   const allMastered = masteredCount === items.length && items.length > 0;
@@ -2119,7 +2136,8 @@ function App() {
     kanjiPopup && React.createElement(KanjiPopup, { char:kanjiPopup, onClose:()=>setKanjiPopup(null), items }),
     wordPopup && React.createElement(WordPopup, { token:wordPopup, onClose:()=>setWordPopup(null),
       existing:items, onAdd:(w)=>handleAdd(w) }),
-    React.createElement('div', { style:{ maxWidth:420, margin:'0 auto', padding:20 } },
+    React.createElement('div', { style:{ maxWidth:420, margin:'0 auto', padding:20 },
+      onTouchStart, onTouchEnd },
       // Session controls bar (only on practice tabs)
       (mode==='write' || mode==='quiz') && React.createElement('div', {
         style:{ display:'flex', alignItems:'center', justifyContent:'space-between',
@@ -2135,10 +2153,10 @@ function App() {
       ),
       mode==='write' && (deckEmpty
         ? React.createElement('div', { style:{ textAlign:'center', color:C.muted, padding:'40px 20px' } }, 'No active words. Add some in the Words tab.')
-        : React.createElement(WriteMode, { key:deck.length, items:deck, progress, onAnswer:handleAnswer, onCurrentWord:(id)=>{currentWordRef.current=id;}, onTapKanji:setKanjiPopup, onTapWord:setWordPopup })),
+        : React.createElement(WriteMode, { items:deck, progress, idx:Math.min(deckIdx, deck.length-1), onAdvance:advanceDeck, onAnswer:handleAnswer, onCurrentWord:(id)=>{currentWordRef.current=id;}, onTapKanji:setKanjiPopup, onTapWord:setWordPopup })),
       mode==='quiz' && (deckEmpty
         ? React.createElement('div', { style:{ textAlign:'center', color:C.muted, padding:'40px 20px' } }, 'No active words. Add some in the Words tab.')
-        : React.createElement(QuizMode, { key:deck.length, items:deck, progress, onAnswer:handleAnswer, onCurrentWord:(id)=>{currentWordRef.current=id;}, onTapKanji:setKanjiPopup, onTapWord:setWordPopup })),
+        : React.createElement(QuizMode, { items:deck, progress, idx:Math.min(deckIdx, deck.length-1), onAdvance:advanceDeck, onAnswer:handleAnswer, onCurrentWord:(id)=>{currentWordRef.current=id;}, onTapKanji:setKanjiPopup, onTapWord:setWordPopup })),
       mode==='words' && React.createElement(WordsMode, { items, progress, onRemove:handleRemove, onAdd:handleAdd, onEdit:handleEdit, onMerge:handleMerge, onResetWord:resetWord, onMarkMastered:markMastered, activeIds:activeIds||[], onAddToActive:addToActive, onRemoveFromActive:removeFromActive, masteryTarget, onTapKanji:setKanjiPopup, onTapWord:setWordPopup }),
       mode==='read' && React.createElement(ReadMode, { onTapWord:setWordPopup }),
       mode==='kanji' && React.createElement(KanjiMode, { items })
