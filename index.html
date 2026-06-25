@@ -761,7 +761,26 @@ function TappableKanji({ text, onTapKanji, style }) {
   );
 }
 
-// Popup showing a word's dictionary entry (from Jisho), with "Add to my words"
+// Renders a sentence with furigana over the kanji (read-only, no tapping)
+function FuriganaSentence({ sentence, style }) {
+  const [html, setHtml] = React.useState(null);
+  React.useEffect(() => {
+    if (!sentence) return;
+    setHtml(null);
+    annotateSentence(sentence, h => setHtml(h));
+  }, [sentence]);
+  if (!sentence) return null;
+  return html
+    ? React.createElement('span', { style, dangerouslySetInnerHTML: { __html: html } })
+    : React.createElement('span', { style }, sentence);
+}
+
+// Extract the lookup key (kanji/kana before any parenthesis) from an xref display string
+function xrefLookupKey(displayStr) {
+  if (!displayStr) return '';
+  return displayStr.split('（')[0].trim();
+}
+
 // Collapsible dropdown section (starts collapsed)
 function Collapsible({ title, count, children }) {
   const [open, setOpen] = React.useState(false);
@@ -782,15 +801,20 @@ function Collapsible({ title, count, children }) {
 function WordPopup({ token, onClose, onAdd, existing }) {
   const [info, setInfo] = React.useState(undefined);
   const [added, setAdded] = React.useState(false);
-  const lookup = token ? (token.basic || token.surface) : null;
+  const [override, setOverride] = React.useState(null); // {basic, surface} when navigating to a see-also word
+  const activeToken = override || token;
+  const lookup = activeToken ? (activeToken.basic || activeToken.surface) : null;
+
+  // Reset override whenever the source token changes
+  React.useEffect(() => { setOverride(null); }, [token]);
 
   React.useEffect(() => {
-    if (!token) return;
+    if (!activeToken) return;
     let alive = true;
     setInfo(undefined); setAdded(false);
     (async () => {
       // Try dictionary form, then surface form, then kana reading
-      const candidates = [token.basic, token.surface, kataToHira(token.reading)]
+      const candidates = [activeToken.basic, activeToken.surface, kataToHira(activeToken.reading)]
         .filter((v, i, a) => v && a.indexOf(v) === i);
       let result = null;
       for (const c of candidates) {
@@ -800,13 +824,13 @@ function WordPopup({ token, onClose, onAdd, existing }) {
       if (alive) setInfo(result);
     })();
     return () => { alive = false; };
-  }, [token]);
+  }, [activeToken]);
 
   if (!token) return null;
 
   const alreadyHave = existing && existing.some(w => w.word === lookup);
   const senses = (info && info.senses) || [];
-  const reading = (info && info.reading) || kataToHira(token.reading) || '';
+  const reading = (info && info.reading) || kataToHira(activeToken.reading) || '';
   const allMeanings = senses.flatMap(s => s.glosses || []);
 
   const doAdd = () => {
@@ -837,6 +861,10 @@ function WordPopup({ token, onClose, onAdd, existing }) {
         maxHeight: '80vh', overflowY: 'auto' }},
       React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 } },
         React.createElement('div', null,
+          override && React.createElement('button', {
+            onClick: () => setOverride(null),
+            style: { background: 'none', border: 'none', color: C.gold, cursor: 'pointer', fontSize: 12, padding: 0, marginBottom: 4 }
+          }, `← back to ${token.basic || token.surface}`),
           React.createElement('div', { style: { fontSize: 30, fontWeight: 700, color: C.ink, lineHeight: 1.1 } }, lookup),
           reading && reading !== lookup && React.createElement('div', { style: { fontSize: 14, color: C.muted, marginTop: 2 } }, reading)
         ),
@@ -869,12 +897,22 @@ function WordPopup({ token, onClose, onAdd, existing }) {
             React.createElement('div', null, info.altForms.join('、'))
           ),
           info.related && info.related.length > 0 && React.createElement('div', { style: { marginBottom: 8 } },
-            React.createElement('div', { style: { fontSize: 11, color: C.muted, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 } }, 'See also'),
-            React.createElement('div', null, info.related.join('、'))
+            React.createElement('div', { style: { fontSize: 11, color: C.muted, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 } }, 'See also'),
+            React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6 } },
+              info.related.map((r, i) => React.createElement('button', { key: i,
+                onClick: () => { const k = xrefLookupKey(r); if (k) setOverride({ basic: k, surface: k }); },
+                style: { background: C.paperDark, border: `1px solid ${C.line}`, borderRadius: 6,
+                  padding: '4px 10px', fontSize: 13, color: C.gold, cursor: 'pointer' } }, r))
+            )
           ),
           info.antonym && info.antonym.length > 0 && React.createElement('div', null,
-            React.createElement('div', { style: { fontSize: 11, color: C.muted, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 } }, 'Antonyms'),
-            React.createElement('div', null, info.antonym.join('、'))
+            React.createElement('div', { style: { fontSize: 11, color: C.muted, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 } }, 'Antonyms'),
+            React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6 } },
+              info.antonym.map((r, i) => React.createElement('button', { key: i,
+                onClick: () => { const k = xrefLookupKey(r); if (k) setOverride({ basic: k, surface: k }); },
+                style: { background: C.paperDark, border: `1px solid ${C.line}`, borderRadius: 6,
+                  padding: '4px 10px', fontSize: 13, color: C.gold, cursor: 'pointer' } }, r))
+            )
           )
         );
       })(),
@@ -885,8 +923,8 @@ function WordPopup({ token, onClose, onAdd, existing }) {
         info.examples.map((ex, i) =>
           React.createElement('div', { key: i, style: { marginBottom: 10, paddingBottom: 10,
             borderBottom: i < info.examples.length - 1 ? `1px solid ${C.line}` : 'none' } },
-            React.createElement('div', { style: { fontSize: 15, color: C.ink, lineHeight: 1.5 } }, ex.ja),
-            ex.en && React.createElement('div', { style: { fontSize: 12, color: C.muted, marginTop: 2 } }, ex.en)
+            React.createElement(FuriganaSentence, { sentence: ex.ja, style: { fontSize: 16, color: C.ink, lineHeight: 2 } }),
+            ex.en && React.createElement('div', { style: { fontSize: 12, color: C.muted, marginTop: 4 } }, ex.en)
           )
         )
       ),
