@@ -923,7 +923,8 @@ function WordPopup({ token, onClose, onAdd, existing }) {
         info.examples.map((ex, i) =>
           React.createElement('div', { key: i, style: { marginBottom: 10, paddingBottom: 10,
             borderBottom: i < info.examples.length - 1 ? `1px solid ${C.line}` : 'none' } },
-            React.createElement(FuriganaSentence, { sentence: ex.ja, style: { fontSize: 16, color: C.ink, lineHeight: 2 } }),
+            React.createElement('div', { style: { fontSize: 16, color: C.ink, lineHeight: 2 } },
+              React.createElement(TappableSentence, { sentence: ex.ja, onTapWord: (t) => setOverride(t) })),
             ex.en && React.createElement('div', { style: { fontSize: 12, color: C.muted, marginTop: 4 } }, ex.en)
           )
         )
@@ -1187,7 +1188,7 @@ function FormField({ label, value, setter, placeholder, hint, clearError }) {
   );
 }
 
-function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemove, onResetWord, onMarkMastered }) {
+function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemove, onResetWord, onMarkMastered, onTapWord }) {
   const [word, setWord] = useState(editItem ? editItem.word : '');
   const [reading, setReading] = useState(editItem ? (editItem.reading||'') : '');
   const [meanings, setMeanings] = useState(editItem ? (editItem.meanings||[]).join(', ') : '');
@@ -1195,6 +1196,8 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
   const [sentenceEn, setSentenceEn] = useState(editItem ? (editItem.sentenceEn||'') : '');
   const [error, setError] = useState('');
   const isEdit = !!editItem;
+  // For an existing word: start in "view" mode; for a new word: straight to the form
+  const [editingFields, setEditingFields] = useState(!isEdit);
   const ep = (editItem && progress && progress[editItem.id]) || { correct:0, wrong:0, streak:0 };
   const hasProgress = (ep.correct||0)+(ep.wrong||0) > 0;
   const isMastered = (ep.streak||0) >= (masteryTarget||5);
@@ -1210,48 +1213,78 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
 
   const clearError = () => setError('');
 
+  // Action buttons row (mark mastered / reset / delete / edit) — view mode only
+  const actionRow = React.createElement('div', { style:{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginBottom:18 } },
+    React.createElement('button', {
+      onClick: () => { if (!isMastered) onMarkMastered(); },
+      disabled: isMastered,
+      style:{ padding:'10px 6px', borderRadius:8, border:`1px solid ${C.correct}`,
+        background: isMastered ? C.softGreen : 'transparent', color:C.correct,
+        cursor: isMastered ? 'default' : 'pointer', fontSize:12, fontWeight:600 }
+    }, isMastered ? '✓ Mastered' : 'Mark mastered'),
+    React.createElement('button', {
+      onClick: () => { if (hasProgress && confirm(`Reset progress for "${editItem.word}"?`)) onResetWord(); },
+      disabled: !hasProgress,
+      style:{ padding:'10px 6px', borderRadius:8, border:`1px solid ${hasProgress?C.gold:C.line}`,
+        background:'transparent', color: hasProgress?C.gold:C.line,
+        cursor: hasProgress?'pointer':'default', fontSize:12, fontWeight:600 }
+    }, 'Reset progress'),
+    React.createElement('button', {
+      onClick: () => setEditingFields(true),
+      style:{ padding:'10px 6px', borderRadius:8, border:`1px solid ${C.accent}`,
+        background:'transparent', color:C.accent, cursor:'pointer', fontSize:12, fontWeight:600 }
+    }, '✎ Edit'),
+    React.createElement('button', {
+      onClick: () => { if (confirm(`Delete "${editItem.word}"?`)) onRemove(); },
+      style:{ padding:'10px 6px', borderRadius:8, border:`1px solid ${C.wrong}`,
+        background:'transparent', color:C.wrong, cursor:'pointer', fontSize:12, fontWeight:600 }
+    }, 'Delete')
+  );
+
+  // View mode body: meaning, reading, clickable example sentence with furigana
+  const viewBody = isEdit && React.createElement('div', null,
+    React.createElement('div', { style:{ fontSize:13, color:C.muted, marginBottom:14, lineHeight:1.6 } },
+      (editItem.meanings||[]).join(', ')),
+    editItem.sentence && React.createElement('div', { style:{ background:C.paperDark, borderRadius:8, padding:'12px 14px', marginBottom:6 } },
+      React.createElement('div', { style:{ fontSize:16, color:C.ink, lineHeight:2 } },
+        onTapWord
+          ? React.createElement(TappableSentence, { sentence:editItem.sentence, onTapWord })
+          : React.createElement(FuriganaSentence, { sentence:editItem.sentence })),
+      editItem.sentenceEn && React.createElement('div', { style:{ fontSize:12, color:C.muted, marginTop:6, lineHeight:1.5 } }, editItem.sentenceEn)
+    )
+  );
+
+  // Editable form body
+  const formBody = React.createElement(React.Fragment, null,
+    React.createElement(FormField, { key:'w', label:'Word *', value:word, setter:setWord, placeholder:'失敗', clearError }),
+    React.createElement(FormField, { key:'r', label:'Reading', value:reading, setter:setReading, placeholder:'シッパイ', hint:'Kana reading (optional)', clearError }),
+    React.createElement(FormField, { key:'m', label:'Meanings *', value:meanings, setter:setMeanings, placeholder:'failure, mistake', hint:'Comma-separated', clearError }),
+    React.createElement(FormField, { key:'s', label:'Example sentence', value:sentence, setter:setSentence, placeholder:'彼は失敗した。', clearError }),
+    React.createElement(FormField, { key:'t', label:'Translation', value:sentenceEn, setter:setSentenceEn, placeholder:'He failed.', clearError }),
+    error && React.createElement('div', { style:{ color:C.wrong, fontSize:12, marginBottom:12 } }, error),
+    React.createElement('div', { style:{ display:'flex', gap:10 } },
+      React.createElement('button', { onClick: isEdit ? () => setEditingFields(false) : onClose, style:btn(C.line, C.ink) }, isEdit ? 'Back' : 'Cancel'),
+      React.createElement('button', { onClick:submit, style:btn(C.accent,'white') }, isEdit ? 'Save changes' : 'Add word')
+    )
+  );
+
   return React.createElement('div', {
     style:{ position:'fixed', inset:0, background:'rgba(0,0,0,0.4)', zIndex:100,
       display:'flex', alignItems:'flex-end', justifyContent:'center' }},
     React.createElement('div', {
       style:{ background:C.paper, borderRadius:'16px 16px 0 0', padding:24,
         width:'100%', maxWidth:480, maxHeight:'85vh', overflowY:'auto' }},
-      React.createElement('div', { style:{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20 } },
-        React.createElement('div', { style:{ fontSize:17, fontWeight:700, color:C.ink } }, isEdit ? 'Edit word' : 'Add word'),
+      React.createElement('div', { style:{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:16 } },
+        React.createElement('div', null,
+          React.createElement('div', { style:{ fontSize:26, fontWeight:700, color:C.ink, lineHeight:1.1 } },
+            isEdit && !editingFields ? editItem.word : (isEdit ? 'Edit word' : 'Add word')),
+          isEdit && !editingFields && editItem.reading &&
+            React.createElement('div', { style:{ fontSize:14, color:C.muted, marginTop:2 } },
+              React.createElement(KanaReading, { word:editItem.word, fallback:editItem.reading }))
+        ),
         React.createElement('button', { onClick:onClose, style:{ background:'none', border:'none', fontSize:20, cursor:'pointer', color:C.muted } }, '✕')
       ),
-      // Quick actions (edit mode only)
-      isEdit && React.createElement('div', { style:{ display:'flex', gap:8, marginBottom:18 } },
-        React.createElement('button', {
-          onClick: () => { if (!isMastered) onMarkMastered(); },
-          disabled: isMastered,
-          style:{ flex:1, padding:'9px 6px', borderRadius:8, border:`1px solid ${C.correct}`,
-            background: isMastered ? C.softGreen : 'transparent', color:C.correct,
-            cursor: isMastered ? 'default' : 'pointer', fontSize:12, fontWeight:600 }
-        }, isMastered ? '✓ Mastered' : 'Mark mastered'),
-        React.createElement('button', {
-          onClick: () => { if (hasProgress && confirm(`Reset progress for "${editItem.word}"?`)) onResetWord(); },
-          disabled: !hasProgress,
-          style:{ flex:1, padding:'9px 6px', borderRadius:8, border:`1px solid ${hasProgress?C.gold:C.line}`,
-            background:'transparent', color: hasProgress?C.gold:C.line,
-            cursor: hasProgress?'pointer':'default', fontSize:12, fontWeight:600 }
-        }, 'Reset progress'),
-        React.createElement('button', {
-          onClick: () => { if (confirm(`Delete "${editItem.word}"?`)) onRemove(); },
-          style:{ flex:1, padding:'9px 6px', borderRadius:8, border:`1px solid ${C.wrong}`,
-            background:'transparent', color:C.wrong, cursor:'pointer', fontSize:12, fontWeight:600 }
-        }, 'Delete')
-      ),
-      React.createElement(FormField, { key:'w', label:'Word *', value:word, setter:setWord, placeholder:'失敗', clearError }),
-      React.createElement(FormField, { key:'r', label:'Reading', value:reading, setter:setReading, placeholder:'シッパイ', hint:'Kana reading (optional)', clearError }),
-      React.createElement(FormField, { key:'m', label:'Meanings *', value:meanings, setter:setMeanings, placeholder:'failure, mistake', hint:'Comma-separated', clearError }),
-      React.createElement(FormField, { key:'s', label:'Example sentence', value:sentence, setter:setSentence, placeholder:'彼は失敗した。', clearError }),
-      React.createElement(FormField, { key:'t', label:'Translation', value:sentenceEn, setter:setSentenceEn, placeholder:'He failed.', clearError }),
-      error && React.createElement('div', { style:{ color:C.wrong, fontSize:12, marginBottom:12 } }, error),
-      React.createElement('div', { style:{ display:'flex', gap:10 } },
-        React.createElement('button', { onClick:onClose, style:btn(C.line, C.ink) }, 'Cancel'),
-        React.createElement('button', { onClick:submit, style:btn(C.accent,'white') }, isEdit ? 'Save changes' : 'Add word')
-      )
+      (isEdit && !editingFields) ? React.createElement(React.Fragment, null, actionRow, viewBody) : formBody
     )
   );
 }
@@ -1450,7 +1483,7 @@ function AddListForm({ onMerge, onClose }) {
   );
 }
 
-function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetWord, onMarkMastered, activeIds, onAddToActive, onRemoveFromActive, masteryTarget, onTapKanji }) {
+function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetWord, onMarkMastered, activeIds, onAddToActive, onRemoveFromActive, masteryTarget, onTapKanji, onTapWord }) {
   const [showAdd, setShowAdd] = useState(false);
   const [showAddList, setShowAddList] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -1481,7 +1514,7 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
       {showAdd && React.createElement(AddWordForm, { onAdd, onClose:()=>setShowAdd(false) })}
       {showAddList && React.createElement(AddListForm, { onMerge, onClose:()=>setShowAddList(false) })}
       {editing && React.createElement(AddWordForm, { editItem:editing, onAdd:(w)=>onEdit(editing.id, w), onClose:()=>setEditing(null),
-        progress, masteryTarget,
+        progress, masteryTarget, onTapWord,
         onRemove:()=>{ onRemove(editing.id); setEditing(null); },
         onResetWord:()=>{ onResetWord(editing.id); setEditing(null); },
         onMarkMastered:()=>{ onMarkMastered(editing.id); setEditing(null); } })}
@@ -1665,6 +1698,57 @@ function shuffle(arr) {
   return a;
 }
 
+// ── Read tab — paste text, get furigana + tappable words ────────────────
+function ReadMode({ onTapWord }) {
+  const [raw, setRaw] = useState('');
+  const [processed, setProcessed] = useState(null); // array of paragraph strings, or null
+
+  const process = () => {
+    const text = raw.trim();
+    if (!text) return;
+    // Split into paragraphs on blank lines / newlines, keep non-empty
+    const paras = text.split(/\n+/).map(p => p.trim()).filter(Boolean);
+    setProcessed(paras);
+  };
+
+  const reset = () => { setProcessed(null); };
+
+  if (processed) {
+    return React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 16 } },
+      React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+        React.createElement('div', { style: { fontSize: 13, color: C.muted } }, 'Tap any word for its dictionary entry'),
+        React.createElement('button', { onClick: reset,
+          style: { background: C.card, border: `1px solid ${C.line}`, borderRadius: 6,
+            padding: '6px 12px', fontSize: 12, cursor: 'pointer', color: C.ink } }, 'Edit')
+      ),
+      React.createElement('div', { style: { background: C.card, border: `1px solid ${C.line}`,
+        borderRadius: 10, padding: '18px 16px', display: 'flex', flexDirection: 'column', gap: 14 } },
+        processed.map((para, i) =>
+          React.createElement('div', { key: i, style: { fontSize: 18, lineHeight: 2.4, color: C.ink } },
+            React.createElement(TappableSentence, { sentence: para, onTapWord })
+          )
+        )
+      )
+    );
+  }
+
+  return React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
+    React.createElement('div', { style: { fontSize: 14, color: C.muted, lineHeight: 1.5 } },
+      'Paste any Japanese text below.'),
+    React.createElement('textarea', {
+      value: raw, onChange: e => setRaw(e.target.value),
+      placeholder: '日本語のテキストをここに貼り付けてください…',
+      style: { width: '100%', minHeight: 180, padding: 14, borderRadius: 10,
+        border: `1px solid ${C.line}`, fontSize: 16, lineHeight: 1.7, resize: 'vertical',
+        outline: 'none', boxSizing: 'border-box', background: C.card, color: C.ink }
+    }),
+    React.createElement('button', {
+      onClick: process, disabled: !raw.trim(),
+      style: { ...btn(raw.trim() ? C.accent : C.line, 'white'), flex: 'unset', width: '100%' }
+    }, 'Process')
+  );
+}
+
 // ── Kanji dictionary tab ─────────────────────────────────────────────────
 function KanjiMode({ items, onTapWord }) {
   const [search, setSearch] = useState('');
@@ -1765,6 +1849,7 @@ function App() {
   const [activeIds, setActiveIds] = useState(null);
   const [deckLoaded, setDeckLoaded] = useState(false);
   const currentWordRef = useRef(null);
+  const shuffledOrderRef = useRef(null);
   const [kanjiPopup, setKanjiPopup] = useState(null);
   const [wordPopup, setWordPopup] = useState(null);
   const [theme, setTheme] = useState(loadTheme);
@@ -1968,25 +2053,39 @@ function App() {
     style:{ minHeight:'100vh', background:C.paper, display:'flex', alignItems:'center' }},
     React.createElement(ImportScreen, { onImport:handleImport, onAccount:()=>setShowAccount(true) }));
 
-  // Active deck: the words for this session, in shuffled order
+  // Active deck: the words for this session, in shuffled display order.
+  // The order is shuffled once when the app opens, and stays stable as words
+  // get mastered during a session (mastered words just drop out, order kept).
+  // New words added to the active set get appended (shuffled in).
   const idToItem = {};
   items.forEach(it => { idToItem[it.id] = it; });
-  const deck = (activeIds || []).map(id => idToItem[id]).filter(Boolean);
+  const curSet = new Set(activeIds || []);
+  if (shuffledOrderRef.current === null) {
+    // First build this app session: shuffle the whole active set
+    shuffledOrderRef.current = shuffle(activeIds || []);
+  } else {
+    // Keep existing order minus removed ids, then append any newly-added ids
+    const kept = shuffledOrderRef.current.filter(id => curSet.has(id));
+    const keptSet = new Set(kept);
+    const added = (activeIds || []).filter(id => !keptSet.has(id));
+    shuffledOrderRef.current = added.length ? [...kept, ...shuffle(added)] : kept;
+  }
+  const deck = shuffledOrderRef.current.map(id => idToItem[id]).filter(Boolean);
   const deckEmpty = deck.length === 0;
 
   const masteredCount = items.filter(it => (progress[it.id]?.streak||0) >= masteryTarget).length;
   const allMastered = masteredCount === items.length && items.length > 0;
 
   return React.createElement('div', { style:{ minHeight:'100vh', background:C.paper } },
-    React.createElement('div', { style:{ background:C.header, color:'white', padding:'12px 16px',
-      display:'flex', alignItems:'center', justifyContent:'space-between' }},
-      React.createElement('div', { style:{ fontSize:18, fontWeight:700 } }, '漢字'),
-      React.createElement('div', { style:{ display:'flex', gap:2 } },
-        [['write','Write'],['quiz','Quiz'],['words','Words'],['kanji','Dict'],['account','⚙']].map(([m,label])=>
+    React.createElement('div', { style:{ background:C.header, color:'white', padding:'12px 14px',
+      display:'flex', alignItems:'center', justifyContent:'space-between', gap:8, flexWrap:'wrap' }},
+      React.createElement('div', { style:{ fontSize:18, fontWeight:700, flexShrink:0 } }, '漢字'),
+      React.createElement('div', { style:{ display:'flex', gap:1, flexWrap:'wrap', justifyContent:'flex-end' } },
+        [['write','Write'],['quiz','Quiz'],['words','Words'],['read','Read'],['kanji','Dict'],['account','⚙']].map(([m,label])=>
           React.createElement('button', { key:m, onClick:()=> m==='account' ? setShowAccount(true) : setMode(m), style:{
-            padding:'6px 9px', borderRadius:6, border:'none',
+            padding:'6px 7px', borderRadius:6, border:'none',
             background:mode===m?'rgba(255,255,255,0.2)':'transparent',
-            color:'white', fontSize:13, cursor:'pointer' }}, label)
+            color:'white', fontSize:12, cursor:'pointer', whiteSpace:'nowrap' }}, label)
         )
       )
     ),
@@ -2013,7 +2112,8 @@ function App() {
       mode==='quiz' && (deckEmpty
         ? React.createElement('div', { style:{ textAlign:'center', color:C.muted, padding:'40px 20px' } }, 'No active words. Add some in the Words tab.')
         : React.createElement(QuizMode, { key:deck.length, items:deck, progress, onAnswer:handleAnswer, onCurrentWord:(id)=>{currentWordRef.current=id;}, onTapKanji:setKanjiPopup, onTapWord:setWordPopup })),
-      mode==='words' && React.createElement(WordsMode, { items, progress, onRemove:handleRemove, onAdd:handleAdd, onEdit:handleEdit, onMerge:handleMerge, onResetWord:resetWord, onMarkMastered:markMastered, activeIds:activeIds||[], onAddToActive:addToActive, onRemoveFromActive:removeFromActive, masteryTarget, onTapKanji:setKanjiPopup }),
+      mode==='words' && React.createElement(WordsMode, { items, progress, onRemove:handleRemove, onAdd:handleAdd, onEdit:handleEdit, onMerge:handleMerge, onResetWord:resetWord, onMarkMastered:markMastered, activeIds:activeIds||[], onAddToActive:addToActive, onRemoveFromActive:removeFromActive, masteryTarget, onTapKanji:setKanjiPopup, onTapWord:setWordPopup }),
+      mode==='read' && React.createElement(ReadMode, { onTapWord:setWordPopup }),
       mode==='kanji' && React.createElement(KanjiMode, { items })
     )
   );
