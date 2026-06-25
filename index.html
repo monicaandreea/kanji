@@ -462,6 +462,27 @@ function compareKana(a, b) {
   return 0;
 }
 
+// Best hiragana sort key for a word entry. Prefers a stored kana reading;
+// ignores romaji readings (from some imports); falls back to the kuroshiro
+// reading cache, then to the word itself. Used so sorting matches what's shown.
+function readingSortKey(item) {
+  if (!item) return '';
+  const r = (item.reading || '').trim();
+  // Stored reading is usable only if it's actual kana (not romaji like "muku")
+  if (r && /[\u3040-\u30ff]/.test(r)) return kanaSortKey(r);
+  // Otherwise use the kuroshiro-computed hiragana if we've cached it
+  const cached = readingCache[item.word];
+  if (cached && /[\u3040-\u30ff]/.test(cached)) return kanaSortKey(cached);
+  // Last resort: the word itself (kanji sorts by code point — imperfect but stable)
+  return kanaSortKey(item.word || '');
+}
+function compareReading(a, b) {
+  const ka = readingSortKey(a), kb = readingSortKey(b);
+  if (ka < kb) return -1;
+  if (ka > kb) return 1;
+  return 0;
+}
+
 // ── Local JMdict dictionary (jmdict-simplified format) ───────────────────
 // Loads jmdict.json once from the same origin (no CORS), builds an index,
 // and caches the built index in IndexedDB so future loads are instant.
@@ -790,7 +811,7 @@ function KanjiInfoCard({ char }) {
 function KanjiPopup({ char, onClose, items }) {
   if (!char) return null;
   const words = (items || []).filter(it => uniqueKanji(it.word).includes(char))
-    .sort((a, b) => compareKana(a.reading || a.word, b.reading || b.word));
+    .sort((a, b) => compareReading(a, b));
   return React.createElement('div', {
     onClick: onClose,
     style: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 200,
@@ -1113,14 +1134,15 @@ function btn(bg, color, extra) {
 function WriteMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTapWord, idx, onAdvance }) {
   const [phase, setPhase] = useState('write');
   const [clearTrigger, setClearTrigger] = useState(0);
+  const [showStrokes, setShowStrokes] = useState(false); // stroke-order hidden by default for self-testing
 
   const safeIdx = Math.min(idx, items.length - 1);
   const item = items[safeIdx];
   const p = progress[item.id] || { correct: 0, wrong: 0 };
 
   React.useEffect(() => { onCurrentWord && onCurrentWord(item.id); }, [item.id]);
-  // Reset to write phase whenever the card changes (e.g. returning to the tab)
-  React.useEffect(() => { setPhase('write'); }, [item.id]);
+  // Reset to write phase + hide strokes whenever the card changes
+  React.useEffect(() => { setPhase('write'); setShowStrokes(false); }, [item.id]);
 
   const reveal = () => setPhase('reveal');
   const clear = () => setClearTrigger(t => t + 1);
@@ -1146,7 +1168,12 @@ function WriteMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTap
             <div style={{ fontSize:18, color:C.ink, fontWeight:600, marginBottom:6 }}>
               <TappableKanji text={item.word} onTapKanji={onTapKanji} /> · <KanaReading word={item.word} fallback={item.reading} />
             </div>
-            <StrokeOrder word={item.word} />
+            <button onClick={() => setShowStrokes(s => !s)}
+              style={{ background:C.card, border:`1px solid ${C.line}`, borderRadius:6,
+                padding:'5px 12px', fontSize:12, cursor:'pointer', color:C.ink, marginBottom:10 }}>
+              {showStrokes ? 'Hide stroke order' : 'Show stroke order'}
+            </button>
+            {showStrokes && <StrokeOrder word={item.word} />}
           </div>
           {getSentences(item).length > 0 && (
             <div style={{ background:C.paperDark, borderRadius:8, padding:'12px 14px', width:'100%' }}>
@@ -1665,14 +1692,12 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
             if (aa!==bb) return aa-bb;
           }
           // "Studying" stays ordered by most-practiced; everything else is
-          // alphabetical by reading (Japanese gojūon order, kana-normalized)
+          // alphabetical by reading (Japanese gojūon order, romaji-aware)
           if (filter==='studied') {
             const pa=progress[a.id]||{}, pb=progress[b.id]||{};
             return ((pb.correct||0)+(pb.wrong||0))-((pa.correct||0)+(pa.wrong||0));
           }
-          const ra = kataToHira(a.reading || a.word || '');
-          const rb = kataToHira(b.reading || b.word || '');
-          return compareKana(ra, rb);
+          return compareReading(a, b);
         }).map(item => {
           const p=progress[item.id]||{correct:0,wrong:0,streak:0};
           const total=p.correct+p.wrong;
@@ -1888,8 +1913,7 @@ function KanjiMode({ items, onTapWord }) {
 
   // Detail view for a single kanji
   if (selected) {
-    const words = [...(kanjiMap[selected] || [])].sort((a, b) =>
-      compareKana(a.reading || a.word, b.reading || b.word));
+    const words = [...(kanjiMap[selected] || [])].sort((a, b) => compareReading(a, b));
     return React.createElement('div', { style:{ display:'flex', flexDirection:'column', gap:16 } },
       React.createElement('button', { onClick:backToGrid,
         style:{ ...btn(C.card,C.ink), border:`1px solid ${C.line}`, flex:'unset', alignSelf:'flex-start', padding:'6px 14px' } }, '← Back'),
