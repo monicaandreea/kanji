@@ -315,7 +315,19 @@ function deriveTheme(accentHex, base) {
 const THEME_KEY = "kanji-theme";           // 'light' | 'dark' | 'custom'
 const CUSTOM_ACCENT_KEY = "kanji-custom-accent";
 const CUSTOM_BASE_KEY = "kanji-custom-base"; // 'light' | 'dark'
+const PALETTE_KEY = "kanji-custom-palette";  // user's saved accent swatches
 const MODE_KEY = "kanji-mode";
+// Default custom palette (order D: warm → cool).
+const DEFAULT_PALETTE = ['#fa46a6', '#fa9d8e', '#fae846', '#a6c246', '#46fa9d', '#b8c6ff', '#b88efa', '#3f007a'];
+function loadPalette() {
+  try {
+    const raw = localStorage.getItem(PALETTE_KEY);
+    if (!raw) return [...DEFAULT_PALETTE];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) && arr.length ? arr : [...DEFAULT_PALETTE];
+  } catch (e) { return [...DEFAULT_PALETTE]; }
+}
+function savePalette(arr) { try { localStorage.setItem(PALETTE_KEY, JSON.stringify(arr)); } catch (e) {} }
 function loadTheme() {
   const t = localStorage.getItem(THEME_KEY);
   return (t === "dark" || t === "custom") ? t : "light";
@@ -1406,6 +1418,32 @@ function btn(bg, color, extra) {
 
 // Small square icon button; shows a diagonal strike when `active` (i.e. the
 // thing it toggles is currently shown → tap to hide).
+// Floating "back to top" button — a star, no symbol. Appears after scrolling
+// down and scrolls the page back to the top. `scrollRef` lets it target a
+// specific scroll container (e.g. the Dict detail page); defaults to window.
+function BackToTop({ scrollRef }) {
+  const [show, setShow] = React.useState(false);
+  React.useEffect(() => {
+    const el = (scrollRef && scrollRef.current) || window;
+    const getY = () => (el === window ? window.scrollY : el.scrollTop);
+    const onScroll = () => setShow(getY() > 240);
+    el.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+    return () => el.removeEventListener('scroll', onScroll);
+  }, [scrollRef]);
+  if (!show) return null;
+  const toTop = () => {
+    const el = (scrollRef && scrollRef.current) || window;
+    if (el === window) window.scrollTo({ top: 0, behavior: 'smooth' });
+    else el.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+  return React.createElement('button', { onClick: toTop, title: 'Back to top', 'aria-label': 'Back to top',
+    style: { position:'fixed', right:18, bottom:18, zIndex:200,
+      border:'none', background:'none', color:C.gold, cursor:'pointer',
+      fontSize:38, lineHeight:1, padding:6,
+      filter:'drop-shadow(0 1px 3px rgba(0,0,0,0.35))' } }, '★');
+}
+
 function IconBtn({ symbol, onClick, active, title, disabled, toggle }) {
   return React.createElement('button', { onClick: disabled ? undefined : onClick, title, disabled,
     style: { position:'relative', width:38, height:38, borderRadius:8,
@@ -1786,6 +1824,21 @@ function AccountScreen({ onClose, onReset, onClearWords, sessionSize, onSessionS
   const [copied, setCopied] = React.useState(false);
   const [sizeInput, setSizeInput] = React.useState(String(sessionSize || 10));
   const [accentDraft, setAccentDraft] = React.useState(customAccent || '#6b4a8f');
+  const [palette, setPalette] = React.useState(loadPalette);
+  const [editPalette, setEditPalette] = React.useState(false);
+
+  const normHex = h => { h = (h||'').trim(); if (!h.startsWith('#')) h = '#' + h; return /^#[0-9a-fA-F]{6}$/.test(h) ? h.toLowerCase() : null; };
+  const addSwatch = () => {
+    const h = normHex(accentDraft); if (!h) return;
+    if (palette.includes(h)) return;
+    const next = [...palette, h]; setPalette(next); savePalette(next);
+  };
+  const deleteSwatch = (i) => { const next = palette.filter((_, idx) => idx !== i); setPalette(next); savePalette(next); };
+  const moveSwatch = (i, dir) => {
+    const j = i + dir; if (j < 0 || j >= palette.length) return;
+    const next = [...palette]; const t = next[i]; next[i] = next[j]; next[j] = t;
+    setPalette(next); savePalette(next);
+  };
 
   const copy = () => {
     navigator.clipboard.writeText(userId).then(() => {
@@ -1802,8 +1855,6 @@ function AccountScreen({ onClose, onReset, onClearWords, sessionSize, onSessionS
     });
   };
 
-  const PRESET_ACCENTS = ['#6b4a8f', '#3b6ea5', '#2e8b6f', '#b5642e', '#a83b5c', '#5a5a8c', '#7a8c3b'];
-
   // Theme selector: Light / Dark / Custom
   const themeSelector = React.createElement('div', { style: { marginBottom: 28 } },
     React.createElement('div', { style: { fontSize: 14, fontWeight: 600, color: C.ink, marginBottom: 10 } }, 'Appearance'),
@@ -1817,12 +1868,34 @@ function AccountScreen({ onClose, onReset, onClearWords, sessionSize, onSessionS
       )
     ),
     theme === 'custom' && React.createElement('div', { style: { background: C.card, border: `1px solid ${C.line}`, borderRadius: 10, padding: 14 } },
-      React.createElement('div', { style: { fontSize: 12, color: C.muted, marginBottom: 10 } }, 'Pick an accent color — the rest of the palette is derived from it.'),
-      React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 } },
-        PRESET_ACCENTS.map(hex =>
-          React.createElement('button', { key: hex, onClick: () => { setAccentDraft(hex); onSetCustomColors(hex, customBase); },
-            style: { width: 32, height: 32, borderRadius: '50%', background: hex, cursor: 'pointer',
-              border: `2px solid ${customAccent === hex ? C.ink : 'transparent'}`, boxShadow: '0 1px 2px rgba(0,0,0,0.2)' } })
+      React.createElement('div', { style: { display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom: 10 } },
+        React.createElement('div', { style: { fontSize: 12, color: C.muted } }, 'Pick an accent — the palette is derived from it.'),
+        React.createElement('button', { onClick: () => setEditPalette(e => !e),
+          style: { background:'none', border:'none', color: editPalette ? C.accent : C.muted, cursor:'pointer', fontSize:12, fontWeight:600, padding:'2px 4px' } },
+          editPalette ? 'Done' : 'Edit')
+      ),
+      React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: editPalette ? 12 : 8, marginBottom: 12 } },
+        palette.map((hex, i) =>
+          editPalette
+            ? React.createElement('div', { key: hex+i, style: { display:'flex', flexDirection:'column', alignItems:'center', gap:4 } },
+                React.createElement('button', { onClick:()=>{ askConfirm('Delete this color?', { confirmLabel:'Delete', danger:true }).then(ok=>{ if(ok) deleteSwatch(i); }); },
+                  title:'Delete color',
+                  style: { position:'relative', width:32, height:32, borderRadius:'50%', background:hex,
+                    border:`1px solid ${C.line}`, boxShadow:'0 1px 2px rgba(0,0,0,0.2)', cursor:'pointer', padding:0,
+                    display:'flex', alignItems:'center', justifyContent:'center' } },
+                  React.createElement('span', { style:{ color:bestText(hex), fontSize:13, fontWeight:700, lineHeight:1,
+                    textShadow:'0 1px 2px rgba(0,0,0,0.3)' } }, '✕')
+                ),
+                React.createElement('div', { style: { display:'flex', gap:6, alignItems:'center' } },
+                  React.createElement('button', { onClick:()=>moveSwatch(i,-1), disabled:i===0, title:'Move left',
+                    style:{ background:'none', border:'none', cursor:i===0?'default':'pointer', color:i===0?C.line:C.muted, fontSize:14, padding:'0 2px' } }, '‹'),
+                  React.createElement('button', { onClick:()=>moveSwatch(i,1), disabled:i===palette.length-1, title:'Move right',
+                    style:{ background:'none', border:'none', cursor:i===palette.length-1?'default':'pointer', color:i===palette.length-1?C.line:C.muted, fontSize:14, padding:'0 2px' } }, '›')
+                )
+              )
+            : React.createElement('button', { key: hex+i, onClick: () => { setAccentDraft(hex); onSetCustomColors(hex, customBase); },
+                style: { width: 32, height: 32, borderRadius: '50%', background: hex, cursor: 'pointer',
+                  border: `2px solid ${customAccent === hex ? C.ink : 'transparent'}`, boxShadow: '0 1px 2px rgba(0,0,0,0.2)' } })
         )
       ),
       React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 } },
@@ -1831,10 +1904,12 @@ function AccountScreen({ onClose, onReset, onClearWords, sessionSize, onSessionS
           style: { width: 44, height: 36, border: 'none', background: 'none', cursor: 'pointer', padding: 0 } }),
         React.createElement('input', { value: accentDraft,
           onChange: e => setAccentDraft(e.target.value),
-          onBlur: () => { if (/^#?[0-9a-fA-F]{6}$/.test(accentDraft)) onSetCustomColors(accentDraft.startsWith('#') ? accentDraft : '#' + accentDraft, customBase); },
+          onBlur: () => { const h = normHex(accentDraft); if (h) onSetCustomColors(h, customBase); },
           placeholder: '#6b4a8f',
           style: { flex: 1, padding: '8px 11px', borderRadius: 6, border: `1px solid ${C.line}`,
-            fontSize: 14, fontFamily: 'monospace', outline: 'none', boxSizing: 'border-box', color: C.ink, background: C.paper } })
+            fontSize: 14, fontFamily: 'monospace', outline: 'none', boxSizing: 'border-box', color: C.ink, background: C.paper } }),
+        React.createElement('button', { onClick: addSwatch,
+          style: { ...btn(C.accent, 'white'), flex: 'unset', padding: '8px 14px' } }, 'Add')
       ),
       React.createElement('div', { style: { display: 'flex', gap: 8 } },
         ['light', 'dark'].map(b =>
@@ -2016,20 +2091,20 @@ function AddListForm({ onMerge, onClose }) {
   );
 }
 
-function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetWord, onMarkMastered, activeIds, onAddToActive, onRemoveFromActive, masteryTarget, onTapKanji, onTapWord, onReshuffle }) {
+function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetWord, onMarkMastered, activeIds, onAddToActive, onRemoveFromActive, onAddAllToActive, onEmptyActive, masteryTarget, onTapKanji, onTapWord, onReshuffle }) {
   const [showAdd, setShowAdd] = useState(false);
   const [showAddList, setShowAddList] = useState(false);
   const [editing, setEditing] = useState(null);
   const [search, setSearch] = useState('');
-  const [activeFirst, setActiveFirst] = useState(false);
+  const [sortMode, setSortMode] = useState('alpha'); // 'alpha' | 'active'
   const [filter, setFilter] = useState('all'); // all | studied | mastered | new
-  // Snapshot of which words count as "active" for SORTING purposes. We freeze
-  // this whenever the view context (filter/search/activeFirst toggle) changes,
-  // but NOT when a single word is toggled — so toggling doesn't re-sort the list
-  // and bounce your scroll position.
+  // Snapshot of which words count as "active" for SORTING purposes. Re-frozen
+  // when the view context changes (incl. switching sort mode), but NOT when a
+  // single word is toggled — so toggling doesn't bounce the scroll.
   const sortActiveRef = React.useRef(null);
   const sortCtxRef = React.useRef('');
-  const sortCtx = `${filter}|${search}|${activeFirst}`;
+  const sortCtx = `${filter}|${search}|${sortMode}`;
+  const activeFirst = sortMode === 'active';
   if (sortCtxRef.current !== sortCtx || sortActiveRef.current === null) {
     sortCtxRef.current = sortCtx;
     sortActiveRef.current = new Set(activeIds || []);
@@ -2149,18 +2224,27 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
             background:'none', border:'none', color:C.muted, cursor:'pointer', fontSize:16 } }, '✕')}
       </div>
 
-      {/* Sort toggle + shuffle new set */}
+      {/* Active-set actions: add all shown · empty · shuffle · sort toggle */}
       <div style={{ display:'flex', alignItems:'center', justifyContent:'flex-end', gap:8, marginTop:-6, flexWrap:'wrap' }}>
-        {onReshuffle && <button onClick={()=>{ askConfirm('Shuffle in a new set of words? Your current active set will be replaced (progress is kept).', { confirmLabel: 'Shuffle' }).then(ok => { if (ok) onReshuffle(); }); }}
+        <button onClick={()=>onAddAllToActive && onAddAllToActive(sorted.map(w=>w.id))}
           style={{ background:C.card, color:C.muted, border:`1px solid ${C.line}`, borderRadius:6,
             padding:'5px 10px', fontSize:12, cursor:'pointer' }}>
-          Shuffle new set
-        </button>}
-        <button onClick={()=>setActiveFirst(v=>!v)}
-          style={{ background: activeFirst ? C.gold : C.card, color: activeFirst ? 'white' : C.muted,
-            border:`1px solid ${activeFirst ? C.gold : C.line}`, borderRadius:6,
+          Add all
+        </button>
+        <button onClick={()=>onEmptyActive && onEmptyActive()}
+          style={{ background:C.card, color:C.muted, border:`1px solid ${C.line}`, borderRadius:6,
             padding:'5px 10px', fontSize:12, cursor:'pointer' }}>
-          {activeFirst ? '✓ Active set first' : 'Active set first'}
+          Empty all
+        </button>
+        {onReshuffle && <button onClick={()=>onReshuffle()}
+          style={{ background:C.card, color:C.muted, border:`1px solid ${C.line}`, borderRadius:6,
+            padding:'5px 10px', fontSize:12, cursor:'pointer' }}>
+          Shuffle
+        </button>}
+        <button onClick={()=>setSortMode(m=> m==='alpha' ? 'active' : 'alpha')}
+          style={{ background:C.card, color:C.muted, border:`1px solid ${C.line}`, borderRadius:6,
+            padding:'5px 10px', fontSize:12, cursor:'pointer' }}>
+          {sortMode==='active' ? '↑ Active cards' : '↑ Alphabetical'}
         </button>
       </div>
 
@@ -2673,6 +2757,20 @@ function App() {
       return next;
     });
   };
+  // Bulk: add many words to the active set (skips mastered + already-active).
+  const addAllToActive = ids => {
+    setActiveIds(prev => {
+      const cur = prev || [];
+      const set = new Set(cur);
+      const add = ids.filter(id => !set.has(id) && (progress[id]?.streak||0) < masteryTarget);
+      if (!add.length) return cur;
+      const next = [...cur, ...add];
+      persistDeck(next);
+      return next;
+    });
+  };
+  // Bulk: clear the active set entirely.
+  const emptyActive = () => { setActiveIds([]); persistDeck([]); };
   const resetProgress = () => {
     askConfirm('Reset all your progress?', { confirmLabel: 'Reset', danger: true }).then(ok => {
       if (!ok) return;
@@ -2788,11 +2886,12 @@ function App() {
       mode==='quiz' && (deckEmpty
         ? React.createElement('div', { style:{ textAlign:'center', color:C.muted, padding:'40px 20px' } }, 'No active words. Add some in the Words tab.')
         : React.createElement(QuizMode, { items:deck, progress, idx:Math.min(deckIdx, deck.length-1), onAdvance:advanceDeck, onAnswer:handleAnswer, onCurrentWord:(id)=>{currentWordRef.current=id;}, onTapKanji:setKanjiPopup, onTapWord:setWordPopup, onEditWord:setEditWordTarget, furigana, onToggleFurigana:toggleFurigana })),
-      mode==='words' && React.createElement(WordsMode, { items, progress, onRemove:handleRemove, onAdd:handleAdd, onEdit:handleEdit, onMerge:handleMerge, onResetWord:resetWord, onMarkMastered:markMastered, activeIds:activeIds||[], onAddToActive:addToActive, onRemoveFromActive:removeFromActive, masteryTarget, onTapKanji:setKanjiPopup, onTapWord:setWordPopup, onReshuffle:reshuffle }),
+      mode==='words' && React.createElement(WordsMode, { items, progress, onRemove:handleRemove, onAdd:handleAdd, onEdit:handleEdit, onMerge:handleMerge, onResetWord:resetWord, onMarkMastered:markMastered, activeIds:activeIds||[], onAddToActive:addToActive, onRemoveFromActive:removeFromActive, onAddAllToActive:addAllToActive, onEmptyActive:emptyActive, masteryTarget, onTapKanji:setKanjiPopup, onTapWord:setWordPopup, onReshuffle:reshuffle }),
       mode==='read' && React.createElement(ReadMode, { onTapWord:setWordPopup,
         raw:readRaw, setRaw:setReadRaw, processed:readProcessed, setProcessed:setReadProcessed }),
       mode==='kanji' && React.createElement(KanjiMode, { items, onEditWord:setEditWordTarget, onPopupKanji:setKanjiPopup })
-    )
+    ),
+    (mode==='words' || mode==='read' || mode==='kanji') && React.createElement(BackToTop, null)
   );
 }
 
