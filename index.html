@@ -158,6 +158,42 @@ var nextTick=require("process/browser.js").nextTick,apply=Function.prototype.app
 <script type="text/babel">
 const { useState, useEffect, useRef } = React;
 
+// ── In-app confirm dialog (replaces window.confirm so it works everywhere) ──
+let _confirmListener = null;
+function askConfirm(message, opts) {
+  return new Promise(resolve => {
+    if (_confirmListener) {
+      _confirmListener({ message, resolve, confirmLabel: (opts && opts.confirmLabel) || 'Confirm', danger: !!(opts && opts.danger) });
+    } else {
+      // Fallback to native confirm if the dialog host isn't mounted
+      resolve(window.confirm(message));
+    }
+  });
+}
+function ConfirmHost() {
+  const [state, setState] = useState(null);
+  useEffect(() => { _confirmListener = setState; return () => { _confirmListener = null; }; }, []);
+  if (!state) return null;
+  const close = (result) => { state.resolve(result); setState(null); };
+  return React.createElement('div', {
+    onClick: () => close(false),
+    style: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 300,
+      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 } },
+    React.createElement('div', {
+      onClick: e => e.stopPropagation(),
+      style: { background: C.paper, borderRadius: 14, padding: 22, width: '100%', maxWidth: 340,
+        boxShadow: '0 8px 30px rgba(0,0,0,0.3)' } },
+      React.createElement('div', { style: { fontSize: 15, color: C.ink, lineHeight: 1.5, marginBottom: 20 } }, state.message),
+      React.createElement('div', { style: { display: 'flex', gap: 10 } },
+        React.createElement('button', { onClick: () => close(false),
+          style: { ...btn(C.card, C.ink), border: `1px solid ${C.line}`, flex: 1 } }, 'Cancel'),
+        React.createElement('button', { onClick: () => close(true),
+          style: { ...btn(state.danger ? C.wrong : C.accent, 'white'), flex: 1 } }, state.confirmLabel)
+      )
+    )
+  );
+}
+
 const LIGHT = {
   ink: "#2e1a3e", paper: "#f7f4ee", paperDark: "#ede9e0",
   muted: "#8a8478", line: "#d4cfc4", correct: "#d6699a",
@@ -167,21 +203,135 @@ const LIGHT = {
 };
 const DARK = {
   ink: "#e8def5", paper: "#1a1320", paperDark: "#241a2e",
-  muted: "#9a8fa8", line: "#3a2f47", correct: "#f0a0c0",
-  wrong: "#c25575", gold: "#b89ad8", card: "#241a2e",
+  muted: "#9a8fa8", line: "#3a2f47", correct: "#c25d8a",
+  wrong: "#8e2a4d", gold: "#b89ad8", card: "#241a2e",
   softGreen: "#3a2230", softGreenBright: "#4a2838", softRed: "#3a1f28",
   accent: "#6b4a8f", header: "#2a1d38",
 };
-const THEME_KEY = "kanji-theme";
+
+// ── Color utilities for the custom theme ─────────────────────────────────
+function hexToRgb(hex) {
+  hex = (hex || '').replace('#', '');
+  if (hex.length === 3) hex = hex.split('').map(c => c + c).join('');
+  const n = parseInt(hex, 16);
+  if (isNaN(n) || hex.length !== 6) return null;
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+function rgbToHex(r, g, b) {
+  const h = x => Math.max(0, Math.min(255, Math.round(x))).toString(16).padStart(2, '0');
+  return `#${h(r)}${h(g)}${h(b)}`;
+}
+function rgbToHsl({ r, g, b }) {
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h = 0, s = 0; const l = (max + min) / 2;
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    if (max === r) h = (g - b) / d + (g < b ? 6 : 0);
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h /= 6;
+  }
+  return { h: h * 360, s: s * 100, l: l * 100 };
+}
+function hslToHex(h, s, l) {
+  h = ((h % 360) + 360) % 360; s = Math.max(0, Math.min(100, s)) / 100; l = Math.max(0, Math.min(100, l)) / 100;
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs((h / 60) % 2 - 1));
+  const m = l - c / 2;
+  let r = 0, g = 0, b = 0;
+  if (h < 60) [r, g, b] = [c, x, 0];
+  else if (h < 120) [r, g, b] = [x, c, 0];
+  else if (h < 180) [r, g, b] = [0, c, x];
+  else if (h < 240) [r, g, b] = [0, x, c];
+  else if (h < 300) [r, g, b] = [x, 0, c];
+  else [r, g, b] = [c, 0, x];
+  return rgbToHex((r + m) * 255, (g + m) * 255, (b + m) * 255);
+}
+
+// Derive a full, legible palette from a single accent color + a light/dark base.
+// The accent's hue sets the whole palette; its saturation and lightness now
+// also nudge the result (within safe bounds) so a pale pastel and a deep vivid
+// pick produce visibly different — but still legible — themes.
+function deriveTheme(accentHex, base) {
+  const rgb = hexToRgb(accentHex) || hexToRgb('#6b4a8f');
+  const { h, s, l } = rgbToHsl(rgb);
+  const goldH = (h + 30) % 360;
+  const compH = (h + 330) % 360;
+
+  // Saturation factor: ~0.35 (very muted pick) … ~1.7 (very vivid), centered ~1.
+  const satF = 0.35 + (Math.max(0, Math.min(100, s)) / 100) * 1.35;
+  // Lightness signal: -1 (very dark pick) … +1 (very light pick).
+  const lSig = (Math.max(0, Math.min(100, l)) - 50) / 50;
+
+  const S = (baseSat, lo, hi) => Math.max(lo == null ? 0 : lo, Math.min(hi == null ? 100 : hi, baseSat * satF));
+  // baseL shifted by `amt` points per unit of lSig, clamped to [lo,hi]
+  const Ld = (baseL, lo, hi, amt) => Math.max(lo, Math.min(hi, baseL + lSig * (amt == null ? 6 : amt)));
+
+  if (base === 'dark') {
+    return {
+      paper: hslToHex(h, S(30, 6, 45), Ld(10, 6, 20, 10)),
+      paperDark: hslToHex(h, S(30, 6, 45), Ld(15, 10, 25, 10)),
+      card: hslToHex(h, S(30, 6, 45), Ld(15, 10, 25, 10)),
+      ink: hslToHex(h, S(40, 18, 55), 90),
+      muted: hslToHex(h, S(22, 8, 40), 62),
+      line: hslToHex(h, S(26, 10, 45), Ld(25, 18, 34, 8)),
+      accent: hslToHex(h, S(60, 25, 90), Ld(44, 32, 56, 12)),
+      header: hslToHex(h, S(42, 14, 65), Ld(18, 12, 28, 9)),
+      gold: hslToHex(goldH, S(60, 35, 92), 72),
+      correct: hslToHex(h, Math.max(40, S(60, 0, 92)), 58),
+      wrong: hslToHex(compH, Math.max(45, S(62, 0, 92)), 42),
+      softGreen: hslToHex(h, S(42, 14, 70), 16),
+      softGreenBright: hslToHex(h, S(42, 14, 70), 22),
+      softRed: hslToHex(compH, S(42, 14, 70), 16),
+    };
+  }
+  // light
+  // For pale picks, pull accent/correct/wrong saturation down as they lighten,
+  // so they read as soft pastels rather than bright neons. pastelF: 1 at mid,
+  // down to ~0.5 for very light picks.
+  const pastelF = lSig > 0 ? (1 - lSig * 0.5) : 1;
+  const SP = (baseSat, lo, hi) => Math.max(lo, Math.min(hi, baseSat * satF * pastelF));
+  return {
+    paper: hslToHex(h, S(22, 6, 50), Ld(96, 90, 99, 6)),
+    paperDark: hslToHex(h, S(20, 6, 48), Ld(91, 84, 96, 6)),
+    card: "#ffffff",
+    ink: hslToHex(h, S(48, 22, 80), Ld(18, 12, 28, 8)),
+    muted: hslToHex(h, S(16, 6, 38), 52),
+    line: hslToHex(h, S(20, 8, 42), Ld(82, 74, 90, 6)),
+    // accent/header go pastel-light AND softer for pale picks (text auto-darkens via btn)
+    accent: hslToHex(h, SP(62, 18, 92), Ld(38, 22, 80, 36)),
+    header: hslToHex(h, SP(62, 18, 92), Ld(38, 22, 80, 36)),
+    gold: hslToHex(goldH, Math.max(28, SP(60, 0, 92)), Ld(58, 50, 78, 16)),
+    correct: hslToHex(h, Math.max(38, SP(60, 0, 92)), Ld(60, 52, 80, 18)),
+    wrong: hslToHex(compH, Math.max(44, SP(62, 0, 92)), Ld(35, 30, 66, 24)),
+    softGreen: hslToHex(h, S(48, 18, 78), 95),
+    softGreenBright: hslToHex(h, S(48, 18, 78), 91),
+    softRed: hslToHex(compH, S(48, 18, 78), 92),
+  };
+}
+
+const THEME_KEY = "kanji-theme";           // 'light' | 'dark' | 'custom'
+const CUSTOM_ACCENT_KEY = "kanji-custom-accent";
+const CUSTOM_BASE_KEY = "kanji-custom-base"; // 'light' | 'dark'
 const MODE_KEY = "kanji-mode";
 function loadTheme() {
   const t = localStorage.getItem(THEME_KEY);
-  return t === "dark" ? "dark" : "light";
+  return (t === "dark" || t === "custom") ? t : "light";
+}
+function loadCustomAccent() { return localStorage.getItem(CUSTOM_ACCENT_KEY) || "#6b4a8f"; }
+function loadCustomBase() { return localStorage.getItem(CUSTOM_BASE_KEY) === "light" ? "light" : "dark"; }
+function paletteFor(name) {
+  if (name === "dark") return DARK;
+  if (name === "custom") return deriveTheme(loadCustomAccent(), loadCustomBase());
+  return LIGHT;
 }
 // C is a live object; its properties are swapped when the theme changes.
-const C = { ...(loadTheme() === "dark" ? DARK : LIGHT) };
+const C = { ...paletteFor(loadTheme()) };
 function applyTheme(name) {
-  const src = name === "dark" ? DARK : LIGHT;
+  const src = paletteFor(name);
+  Object.keys(C).forEach(k => delete C[k]);
   Object.keys(src).forEach(k => { C[k] = src[k]; });
   localStorage.setItem(THEME_KEY, name);
   document.body.style.background = C.paper;
@@ -327,7 +477,14 @@ function parseLLN(raw) {
       }).filter(Boolean);
       return out.length > 0 ? out : null;
     }
-    const arr = JSON.parse(raw);
+
+    // Try JSON first (if it parses as JSON, handle the JSON formats)
+    let arr = null;
+    try { arr = JSON.parse(raw); } catch (e) { arr = null; }
+    if (arr === null) {
+      // Not JSON and not LLN-CSV → try the Takoboto / Anki tab-separated TXT format
+      return parseTakoboto(raw);
+    }
     if (!Array.isArray(arr)) return null;
     // Already in this app's flat format: [{ word, reading, meanings:[...], sentence, sentenceEn, sentences? }]
     if (arr.length && arr[0] && typeof arr[0].word === 'string' && Array.isArray(arr[0].meanings)) {
@@ -366,6 +523,52 @@ function parseLLN(raw) {
     });
     return out.length > 0 ? out : null;
   } catch(e) { return null; }
+}
+
+// Parse a Takoboto / Anki tab-separated text export.
+// Columns: word, reading, meanings(<br>numbered), pos, sentence_ja, sentence_en, link, tags
+function parseTakoboto(raw) {
+  try {
+    const lines = raw.split(/\r?\n/).filter(l => l.trim() && !l.startsWith('#'));
+    const hasCjkKorean = s => /[\uac00-\ud7a3\u4e00-\u9fff\u3040-\u30ff]/.test(s);
+    const cleanMeanings = rawM => {
+      const unescaped = rawM.replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'");
+      const parts = unescaped.split(/<br\s*\/?>/i);
+      const out = [];
+      parts.forEach(p => {
+        p = p.replace(/^\s*\d+\.\s*/, '').trim();
+        if (!p) return;
+        p.split(',').forEach(s => { s = s.trim(); if (s && !hasCjkKorean(s)) out.push(s); });
+      });
+      const seen = new Set(); const res = [];
+      out.forEach(m => { if (!seen.has(m.toLowerCase())) { seen.add(m.toLowerCase()); res.push(m); } });
+      return res;
+    };
+    // Accumulate by word, merging sentences for in-file duplicates
+    const byWord = new Map(); const order = [];
+    lines.forEach(line => {
+      const c = line.split('\t');
+      if (c.length < 3) return;
+      const word = (c[0] || '').trim();
+      const reading = (c[1] || '').trim();
+      const meanings = cleanMeanings(c[2] || '');
+      const ja = (c[4] || '').trim() || null;
+      const en = (c[5] || '').trim() || null;
+      if (!word || !meanings.length) return;
+      if (!byWord.has(word)) {
+        byWord.set(word, { id: `takoboto-${word}`, word, reading, meanings: meanings.slice(0,6), sentences: [] });
+        order.push(word);
+      }
+      const entry = byWord.get(word);
+      if (ja && !entry.sentences.some(s => s.ja === ja)) entry.sentences.push({ ja, en });
+    });
+    const out = order.map(w => {
+      const e = byWord.get(w);
+      const first = e.sentences[0] || null;
+      return { ...e, sentence: first ? first.ja : null, sentenceEn: first ? first.en : null };
+    });
+    return out.length > 0 ? out : null;
+  } catch (e) { return null; }
 }
 
 // ── Furigana via Kuroshiro + kuromoji (lazy-loaded) ──────────────────────
@@ -444,6 +647,65 @@ function tokenizeSentence(sentence, cb) {
 // Katakana -> hiragana
 function kataToHira(s) {
   return (s || '').replace(/[\u30a1-\u30f6]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0x60));
+}
+
+// Compact kana→romaji for search matching (Hepburn-ish). Handles the common
+// digraphs and small-tsu gemination; good enough to cross-match readings that
+// were imported as romaji (LLN) vs kana (Takoboto).
+const ROMAJI_DIGRAPHS = {
+  'きゃ':'kya','きゅ':'kyu','きょ':'kyo','しゃ':'sha','しゅ':'shu','しょ':'sho',
+  'ちゃ':'cha','ちゅ':'chu','ちょ':'cho','にゃ':'nya','にゅ':'nyu','にょ':'nyo',
+  'ひゃ':'hya','ひゅ':'hyu','ひょ':'hyo','みゃ':'mya','みゅ':'myu','みょ':'myo',
+  'りゃ':'rya','りゅ':'ryu','りょ':'ryo','ぎゃ':'gya','ぎゅ':'gyu','ぎょ':'gyo',
+  'じゃ':'ja','じゅ':'ju','じょ':'jo','びゃ':'bya','びゅ':'byu','びょ':'byo',
+  'ぴゃ':'pya','ぴゅ':'pyu','ぴょ':'pyo'
+};
+const ROMAJI_MONO = {
+  'あ':'a','い':'i','う':'u','え':'e','お':'o','か':'ka','き':'ki','く':'ku','け':'ke','こ':'ko',
+  'さ':'sa','し':'shi','す':'su','せ':'se','そ':'so','た':'ta','ち':'chi','つ':'tsu','て':'te','と':'to',
+  'な':'na','に':'ni','ぬ':'nu','ね':'ne','の':'no','は':'ha','ひ':'hi','ふ':'fu','へ':'he','ほ':'ho',
+  'ま':'ma','み':'mi','む':'mu','め':'me','も':'mo','や':'ya','ゆ':'yu','よ':'yo',
+  'ら':'ra','り':'ri','る':'ru','れ':'re','ろ':'ro','わ':'wa','を':'o','ん':'n',
+  'が':'ga','ぎ':'gi','ぐ':'gu','げ':'ge','ご':'go','ざ':'za','じ':'ji','ず':'zu','ぜ':'ze','ぞ':'zo',
+  'だ':'da','ぢ':'ji','づ':'zu','で':'de','ど':'do','ば':'ba','び':'bi','ぶ':'bu','べ':'be','ぼ':'bo',
+  'ぱ':'pa','ぴ':'pi','ぷ':'pu','ぺ':'pe','ぽ':'po',
+  'ぁ':'a','ぃ':'i','ぅ':'u','ぇ':'e','ぉ':'o','ゃ':'ya','ゅ':'yu','ょ':'yo','ー':''
+};
+function kanaToRomaji(s) {
+  const hira = kataToHira(s || '');
+  let out = '', i = 0;
+  while (i < hira.length) {
+    const two = hira.substr(i, 2);
+    if (ROMAJI_DIGRAPHS[two]) { out += ROMAJI_DIGRAPHS[two]; i += 2; continue; }
+    const ch = hira[i];
+    if (ch === 'っ') { // small tsu → double next consonant
+      const nx = hira[i+1];
+      const r = ROMAJI_DIGRAPHS[hira.substr(i+1,2)] || ROMAJI_MONO[nx];
+      if (r) out += r[0];
+      i += 1; continue;
+    }
+    out += (ROMAJI_MONO[ch] !== undefined ? ROMAJI_MONO[ch] : ch);
+    i += 1;
+  }
+  return out;
+}
+// A search key for a reading: normalizes any reading (kana or romaji) toward
+// romaji so kana and romaji queries both match.
+function readingSearchKey(s) {
+  s = (s || '').toLowerCase();
+  // if it contains kana, convert; romaji passes through
+  return /[\u3040-\u30ff]/.test(s) ? kanaToRomaji(s) : s;
+}
+// The leading kanji "stem" of a word — the run of kanji before the okurigana.
+// 遊び→遊, 遊ぶ→遊, 食べる→食, 勉強する→勉強. Lets conjugated/inflected forms
+// of the same word match each other (遊び finds 遊ぶ).
+function kanjiStem(word) {
+  const chars = [...(word || '')];
+  let stem = '';
+  for (const ch of chars) {
+    if (isKanjiChar(ch)) stem += ch; else break;
+  }
+  return stem;
 }
 
 // Portable gojūon (Japanese alphabetical) comparison that doesn't rely on
@@ -687,7 +949,7 @@ function KanaReading({ word, fallback, style }) {
   return React.createElement('span', { style }, kana || fallback || '');
 }
 
-function SentenceDisplay({ sentence, sentenceEn, word, reading, showEn, onTapKanji, onTapWord }) {
+function SentenceDisplay({ sentence, sentenceEn, word, reading, showEn, onTapKanji, onTapWord, furigana = true }) {
   const [furiganaHtml, setFuriganaHtml] = React.useState(null);
 
   React.useEffect(() => {
@@ -700,10 +962,10 @@ function SentenceDisplay({ sentence, sentenceEn, word, reading, showEn, onTapKan
 
   let inner;
   if (onTapWord) {
-    // Tappable per-word tokens (with their own furigana)
-    inner = React.createElement(TappableSentence, { sentence, onTapWord });
+    // Tappable per-word tokens (with their own furigana, toggleable)
+    inner = React.createElement(TappableSentence, { sentence, onTapWord, furigana });
   } else {
-    inner = furiganaHtml
+    inner = (furigana && furiganaHtml)
       ? React.createElement('span', {
           dangerouslySetInnerHTML: { __html: furiganaHtml },
           style: { '--target': `"${word}"` }
@@ -720,7 +982,7 @@ function SentenceDisplay({ sentence, sentenceEn, word, reading, showEn, onTapKan
 }
 
 // Renders all of a word's example sentences, stacked with dividers.
-function SentenceList({ item, word, reading, showEn, onTapKanji, onTapWord }) {
+function SentenceList({ item, word, reading, showEn, onTapKanji, onTapWord, furigana = true }) {
   const sentences = getSentences(item);
   if (!sentences.length) return null;
   return React.createElement('div', { style: { display: 'flex', flexDirection: 'column' } },
@@ -729,7 +991,7 @@ function SentenceList({ item, word, reading, showEn, onTapKanji, onTapWord }) {
         paddingTop: i === 0 ? 0 : 12, marginTop: i === 0 ? 0 : 12,
         borderTop: i === 0 ? 'none' : `1px solid ${C.line}` } },
         React.createElement(SentenceDisplay, { sentence: s.ja, sentenceEn: s.en,
-          word, reading, showEn, onTapKanji, onTapWord })
+          word, reading, showEn, onTapKanji, onTapWord, furigana })
       )
     )
   );
@@ -1042,7 +1304,7 @@ function WordPopup({ token, onClose, onAdd, existing }) {
 }
 
 // Renders a Japanese sentence as tappable word tokens (with furigana).
-function TappableSentence({ sentence, onTapWord }) {
+function TappableSentence({ sentence, onTapWord, furigana = true }) {
   const [tokens, setTokens] = React.useState(null);
   React.useEffect(() => {
     if (!sentence) return;
@@ -1060,7 +1322,7 @@ function TappableSentence({ sentence, onTapWord }) {
       const tappable = hasJa && t.pos && !['助詞','助動詞','記号'].includes(t.pos);
       if (!tappable) return React.createElement('span', { key: i }, t.surface);
       const hira = kataToHira(t.reading);
-      const showFuri = hira && [...(t.surface||'')].some(isKanjiChar) && hira !== t.surface;
+      const showFuri = furigana && hira && [...(t.surface||'')].some(isKanjiChar) && hira !== t.surface;
       return React.createElement('span', {
         key: i,
         onClick: () => onTapWord(t),
@@ -1120,39 +1382,68 @@ function DrawCanvas({ clearTrigger }) {
   return React.createElement('canvas', {
     ref: canvasRef, width: 280, height: 280,
     style: { border: `2px solid ${C.line}`, borderRadius: 8, background: C.card,
-      cursor: 'crosshair', touchAction: 'none', width: '100%', maxWidth: 280 },
+      cursor: 'crosshair', touchAction: 'none', width: '100%', maxWidth: 280, minWidth: 0, flexShrink: 1 },
     onMouseDown: startDraw, onMouseMove: draw, onMouseUp: stopDraw, onMouseLeave: stopDraw,
     onTouchStart: startDraw, onTouchMove: draw, onTouchEnd: stopDraw,
   });
 }
 
+// Choose readable text (dark or white) for a given background color.
+function bestText(bg) {
+  const rgb = hexToRgb(bg);
+  if (!rgb) return 'white';
+  // perceived luminance (0–255); above ~150 → use dark text
+  const lum = 0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b;
+  return lum > 150 ? '#2a2030' : 'white';
+}
 function btn(bg, color, extra) {
+  // If the caller asked for white text, auto-swap to dark when bg is too light.
+  const txt = color === 'white' ? bestText(bg) : color;
   return { flex: 1, padding: '13px 8px', borderRadius: 8, border: `2px solid ${bg}`,
-    background: bg, color, fontSize: 14, cursor: 'pointer', fontWeight: 600, ...(extra||{}) };
+    background: bg, color: txt, fontSize: 14, cursor: 'pointer', fontWeight: 600, ...(extra||{}) };
 }
 
-function WriteMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTapWord, idx, onAdvance }) {
+// Small square icon button; shows a diagonal strike when `active` (i.e. the
+// thing it toggles is currently shown → tap to hide).
+function IconBtn({ symbol, onClick, active, title, disabled }) {
+  return React.createElement('button', { onClick: disabled ? undefined : onClick, title, disabled,
+    style: { position:'relative', width:38, height:38, borderRadius:8,
+      border:`1px solid ${C.line}`, background:C.card, color: disabled ? C.line : C.ink,
+      fontSize:18, cursor: disabled ? 'default' : 'pointer', display:'flex', alignItems:'center',
+      justifyContent:'center', flexShrink:0, padding:0, overflow:'hidden', opacity: disabled ? 0.5 : 1 } },
+    symbol,
+    active && !disabled && React.createElement('span', { style:{ position:'absolute', left:4, right:4, top:'50%',
+      height:2, background:C.muted, transform:'rotate(-45deg)', transformOrigin:'center', pointerEvents:'none' } })
+  );
+}
+
+function WriteMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTapWord, idx, onAdvance, onEditWord, furigana, onToggleFurigana, showStrokes, onToggleStrokes }) {
   const [phase, setPhase] = useState('write');
   const [clearTrigger, setClearTrigger] = useState(0);
-  const [showStrokes, setShowStrokes] = useState(true); // stroke-order shown by default on reveal
 
   const safeIdx = Math.min(idx, items.length - 1);
   const item = items[safeIdx];
   const p = progress[item.id] || { correct: 0, wrong: 0 };
 
   React.useEffect(() => { onCurrentWord && onCurrentWord(item.id); }, [item.id]);
-  // Reset to write phase + hide strokes whenever the card changes
-  React.useEffect(() => { setPhase('write'); setShowStrokes(true); }, [item.id]);
+  React.useEffect(() => { setPhase('write'); }, [item.id]);
 
   const reveal = () => setPhase('reveal');
   const clear = () => setClearTrigger(t => t + 1);
-  const practice = () => { setClearTrigger(t => t + 1); }; // clear canvas, stay on same word & revealed
   const grade = (correct) => {
     onAnswer(item.id, correct);
     setClearTrigger(t => t + 1);
     setPhase('write');
     onAdvance();
   };
+
+  // Vertical icon strip: Edit, stroke-order toggle, furigana toggle, clear/redo
+  const iconStrip = React.createElement('div', { style:{ display:'flex', flexDirection:'column', gap:8, flexShrink:0 } },
+    React.createElement(IconBtn, { symbol:'✎', title:'Edit word', onClick:()=>onEditWord && onEditWord(item) }),
+    React.createElement(IconBtn, { symbol:'画', title:'Stroke order', active:showStrokes, onClick:onToggleStrokes }),
+    React.createElement(IconBtn, { symbol:'あ', title:'Furigana', active:furigana, onClick:onToggleFurigana }),
+    React.createElement(IconBtn, { symbol:'↺', title:'Clear & rewrite', onClick:clear })
+  );
 
   return (
     <div style={{ display:'flex', flexDirection:'column', gap:16, alignItems:'center' }}>
@@ -1161,38 +1452,28 @@ function WriteMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTap
         <div style={{ fontSize:30, fontWeight:700, color:C.ink }}>{item.meanings.slice(0,2).join(' · ')}</div>
         <div style={{ fontSize:11, color:C.muted, marginTop:4 }}>✓ {p.correct} · ✗ {p.wrong}</div>
       </div>
-      <DrawCanvas clearTrigger={clearTrigger} />
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:10, width:'100%' }}>
+        <DrawCanvas clearTrigger={clearTrigger} />
+        {iconStrip}
+      </div>
       {phase === 'reveal' && (
         <div style={{ width:'100%' }}>
           <div style={{ textAlign:'center', marginBottom:8 }}>
             <div style={{ fontSize:18, color:C.ink, fontWeight:600, marginBottom:6 }}>
               <TappableKanji text={item.word} onTapKanji={onTapKanji} /> · <KanaReading word={item.word} fallback={item.reading} />
             </div>
-            <div style={{ display:'flex', gap:8, justifyContent:'center', marginBottom:10 }}>
-              <button onClick={() => setShowStrokes(s => !s)}
-                style={{ background:C.card, border:`1px solid ${C.line}`, borderRadius:6,
-                  padding:'5px 12px', fontSize:12, cursor:'pointer', color:C.ink }}>
-                {showStrokes ? 'Hide stroke order' : 'Show stroke order'}
-              </button>
-              <button onClick={practice}
-                style={{ background:C.card, border:`1px solid ${C.line}`, borderRadius:6,
-                  padding:'5px 12px', fontSize:12, cursor:'pointer', color:C.ink }}>
-                Practice (clear &amp; rewrite)
-              </button>
-            </div>
             {showStrokes && <StrokeOrder word={item.word} />}
           </div>
           {getSentences(item).length > 0 && (
             <div style={{ background:C.paperDark, borderRadius:8, padding:'12px 14px', width:'100%' }}>
-              <SentenceList item={item} word={item.word} reading={item.reading} showEn={true} onTapKanji={onTapKanji} onTapWord={onTapWord} />
+              <SentenceList item={item} word={item.word} reading={item.reading} showEn={true} furigana={furigana} onTapKanji={onTapKanji} onTapWord={onTapWord} />
             </div>
           )}
         </div>
       )}
       {phase === 'write' ? (
         <div style={{ display:'flex', gap:10, width:'100%' }}>
-          <button onClick={clear} style={btn(C.line, C.ink)}>Clear</button>
-          <button onClick={reveal} style={{ ...btn(C.accent,'white'), flex:2 }}>Reveal</button>
+          <button onClick={reveal} style={{ ...btn(C.accent,'white'), width:'100%' }}>Reveal</button>
         </div>
       ) : (
         <div style={{ display:'flex', gap:10, width:'100%' }}>
@@ -1204,7 +1485,7 @@ function WriteMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTap
   );
 }
 
-function QuizMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTapWord, idx, onAdvance }) {
+function QuizMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTapWord, idx, onAdvance, onEditWord, furigana, onToggleFurigana }) {
   const [revealed, setRevealed] = useState(false);
   const [hint, setHint] = useState(false);
 
@@ -1229,13 +1510,20 @@ function QuizMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTapW
 
   return (
     <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
-      <div style={{ textAlign:'center' }}>
-        <div style={{ fontSize:12, color:C.muted, textTransform:'uppercase', letterSpacing:2, marginBottom:10 }}>What does this mean?</div>
-        <div style={{ fontSize:60, fontWeight:700, letterSpacing:4, color:C.ink, lineHeight:1.2, paddingBottom:8 }}>
-          <TappableKanji text={item.word} onTapKanji={onTapKanji} />
+      <div style={{ position:'relative', width:'100%', minHeight:130 }}>
+        <div style={{ textAlign:'center' }}>
+          <div style={{ fontSize:12, color:C.muted, textTransform:'uppercase', letterSpacing:2, marginBottom:10 }}>What does this mean?</div>
+          <div style={{ fontSize:[...item.word].length<=6?44:([...item.word].length<=9?34:26), fontWeight:700, letterSpacing:2, color:C.ink, lineHeight:1.2, paddingBottom:8 }}>
+            <TappableKanji text={item.word} onTapKanji={onTapKanji} />
+          </div>
+          {revealed && <div style={{ fontSize:15, color:C.muted, marginTop:2 }}><KanaReading word={item.word} fallback={item.reading} /></div>}
+          {revealed && <div style={{ fontSize:11, color:C.muted, marginTop:8 }}>✓ {p.correct} · ✗ {p.wrong}</div>}
         </div>
-        {revealed && <div style={{ fontSize:15, color:C.muted, marginTop:2 }}><KanaReading word={item.word} fallback={item.reading} /></div>}
-        <div style={{ fontSize:11, color:C.muted, marginTop:10 }}>✓ {p.correct} · ✗ {p.wrong}</div>
+        <div style={{ position:'absolute', right:0, top:0, display:'flex', flexDirection:'column', gap:8 }}>
+          <IconBtn symbol="✎" title="Edit word" onClick={()=>onEditWord && onEditWord(item)} />
+          <IconBtn symbol="あ" title="Furigana" active={furigana} onClick={onToggleFurigana} />
+          <IconBtn symbol="？" title="Hint (show example sentence)" disabled={hint || revealed || !hasSentence} onClick={()=>setHint(true)} />
+        </div>
       </div>
 
       {revealed && (
@@ -1246,19 +1534,13 @@ function QuizMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTapW
 
       {showSentence && (
         <div style={{ background:C.paperDark, borderRadius:8, padding:'12px 16px' }}>
-          {React.createElement(SentenceList, { item, word:item.word, reading:item.reading, showEn:revealed, onTapKanji:onTapKanji, onTapWord:onTapWord })}
+          {React.createElement(SentenceList, { item, word:item.word, reading:item.reading, showEn:revealed, furigana, onTapKanji:onTapKanji, onTapWord:onTapWord })}
         </div>
       )}
 
       {!revealed ? (
         <div style={{ display:'flex', gap:10, width:'100%' }}>
-          <button onClick={() => setHint(true)} disabled={hint || !hasSentence}
-            style={{ ...btn(C.card, C.ink), border:`1px solid ${C.line}`,
-              opacity: (hint || !hasSentence) ? 0.5 : 1,
-              cursor: (hint || !hasSentence) ? 'default' : 'pointer' }}>
-            {hasSentence ? (hint ? 'Hint shown' : 'Hint') : 'No hint'}
-          </button>
-          <button onClick={() => setRevealed(true)} style={{ ...btn(C.accent,'white'), flex:2 }}>Reveal</button>
+          <button onClick={() => setRevealed(true)} style={{ ...btn(C.accent,'white'), width:'100%' }}>Reveal</button>
         </div>
       ) : (
         <div style={{ display:'flex', gap:10, width:'100%' }}>
@@ -1296,11 +1578,15 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
   const [addingSentence, setAddingSentence] = useState(false);
   const [newJa, setNewJa] = useState('');
   const [newEn, setNewEn] = useState('');
+  const [editSentIdx, setEditSentIdx] = useState(-1); // which sentence is being edited inline (-1 = none)
+  const [editJa, setEditJa] = useState('');
+  const [editEn, setEditEn] = useState('');
   const ep = (editItem && progress && progress[editItem.id]) || { correct:0, wrong:0, streak:0 };
   const hasProgress = (ep.correct||0)+(ep.wrong||0) > 0;
   const isMastered = (ep.streak||0) >= (masteryTarget||5);
 
   const saveSentences = (sentences) => {
+    if (!isEdit) return; // new word: sentences are committed on submit
     onAdd({ ...editItem, sentences,
       sentence: sentences[0] ? sentences[0].ja : null,
       sentenceEn: sentences[0] ? sentences[0].en : null });
@@ -1318,20 +1604,29 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
     setLocalSentences(next);
     saveSentences(next);
   };
+  const startEditSentence = (idx) => {
+    setEditSentIdx(idx);
+    setEditJa(localSentences[idx].ja || '');
+    setEditEn(localSentences[idx].en || '');
+  };
+  const saveEditSentence = () => {
+    const ja = editJa.trim(); if (!ja) return;
+    const next = localSentences.map((s, i) => i === editSentIdx ? { ja, en: editEn.trim() || null } : s);
+    setLocalSentences(next);
+    saveSentences(next);
+    setEditSentIdx(-1); setEditJa(''); setEditEn('');
+  };
+  const cancelEditSentence = () => { setEditSentIdx(-1); setEditJa(''); setEditEn(''); };
 
   const submit = () => {
     if (!word.trim()) { setError('Word is required'); return; }
     if (!meanings.trim()) { setError('At least one meaning is required'); return; }
-    const ja = sentence.trim(), en = sentenceEn.trim();
-    const existing = isEdit ? getSentences(editItem) : [];
-    const rest = existing.slice(1); // everything after the first stays as-is
-    let sentences;
-    if (ja) {
-      // form field becomes the first sentence; keep the others (de-duped against it)
-      sentences = [{ ja, en: en || null }, ...rest.filter(s => s.ja !== ja)];
-    } else {
-      sentences = rest; // first sentence cleared → keep the rest
-    }
+    // Sentences are managed by the sentence list (localSentences), de-duped by ja.
+    const seen = new Set();
+    const sentences = localSentences
+      .filter(s => s && s.ja && s.ja.trim())
+      .map(s => ({ ja: s.ja.trim(), en: (s.en||'').trim() || null }))
+      .filter(s => { if (seen.has(s.ja)) return false; seen.add(s.ja); return true; });
     onAdd({ id: isEdit ? editItem.id : `manual-${word.trim()}-${Date.now()}`, word:word.trim(), reading:reading.trim(),
       meanings:meanings.split(',').map(m=>m.trim()).filter(Boolean),
       sentences,
@@ -1343,57 +1638,77 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
   const clearError = () => setError('');
 
   // Action buttons row (mark mastered / reset / delete / edit) — view mode only
-  const actionRow = React.createElement('div', { style:{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginBottom:18 } },
+  const actionRow = React.createElement('div', { style:{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:6, marginTop:16 } },
     React.createElement('button', {
       onClick: () => { if (!isMastered) onMarkMastered(); },
       disabled: isMastered,
-      style:{ padding:'10px 6px', borderRadius:8, border:`1px solid ${C.correct}`,
+      style:{ padding:'9px 4px', borderRadius:8, border:`1px solid ${C.correct}`,
         background: isMastered ? C.softGreen : 'transparent', color:C.correct,
-        cursor: isMastered ? 'default' : 'pointer', fontSize:12, fontWeight:600 }
-    }, isMastered ? '✓ Mastered' : 'Mark mastered'),
+        cursor: isMastered ? 'default' : 'pointer', fontSize:11, fontWeight:600, lineHeight:1.2 }
+    }, isMastered ? '✓ Mastered' : 'Mastered'),
     React.createElement('button', {
       onClick: () => { if (hasProgress) onResetWord(); },
       disabled: !hasProgress,
-      style:{ padding:'10px 6px', borderRadius:8, border:`1px solid ${hasProgress?C.gold:C.line}`,
+      style:{ padding:'9px 4px', borderRadius:8, border:`1px solid ${hasProgress?C.gold:C.line}`,
         background:'transparent', color: hasProgress?C.gold:C.line,
-        cursor: hasProgress?'pointer':'default', fontSize:12, fontWeight:600 }
-    }, 'Reset progress'),
+        cursor: hasProgress?'pointer':'default', fontSize:11, fontWeight:600, lineHeight:1.2 }
+    }, 'Reset'),
     React.createElement('button', {
       onClick: () => setEditingFields(true),
-      style:{ padding:'10px 6px', borderRadius:8, border:`1px solid ${C.accent}`,
-        background:'transparent', color:C.accent, cursor:'pointer', fontSize:12, fontWeight:600 }
+      style:{ padding:'9px 4px', borderRadius:8, border:`1px solid ${C.accent}`,
+        background:'transparent', color:C.accent, cursor:'pointer', fontSize:11, fontWeight:600, lineHeight:1.2 }
     }, 'Edit'),
     React.createElement('button', {
-      onClick: () => { if (confirm(`Delete "${editItem.word}"?`)) onRemove(); },
-      style:{ padding:'10px 6px', borderRadius:8, border:`1px solid ${C.wrong}`,
-        background:'transparent', color:C.wrong, cursor:'pointer', fontSize:12, fontWeight:600 }
+      onClick: () => { askConfirm(`Delete "${editItem.word}"?`, { confirmLabel: 'Delete', danger: true }).then(ok => { if (ok) onRemove(); }); },
+      style:{ padding:'9px 4px', borderRadius:8, border:`1px solid ${C.wrong}`,
+        background:'transparent', color:C.wrong, cursor:'pointer', fontSize:11, fontWeight:600, lineHeight:1.2 }
     }, 'Delete')
   );
 
-  // View mode body: meaning, reading, example sentences (with add/remove)
-  const viewBody = isEdit && React.createElement('div', null,
-    React.createElement('div', { style:{ fontSize:13, color:C.muted, marginBottom:14, lineHeight:1.6 } },
-      (editItem.meanings||[]).join(', ')),
-    localSentences.length > 0 && React.createElement('div', { style:{ background:C.paperDark, borderRadius:8, padding:'12px 14px', marginBottom:10 } },
+  // Sentence list — `readOnly` hides the ✕ remove buttons and the add-sentence
+  // control (used in the quick-view panel; edit mode passes readOnly=false).
+  const renderSentences = (readOnly) => React.createElement('div', null,
+    localSentences.length > 0 && React.createElement('div', { style:{ background:C.paperDark, borderRadius:8, padding:'12px 14px', marginBottom: readOnly ? 0 : 10 } },
       localSentences.map((s, i) =>
-        React.createElement('div', { key:i, style:{
-          paddingTop: i===0?0:12, marginTop: i===0?0:12,
-          borderTop: i===0?'none':`1px solid ${C.line}`,
-          display:'flex', alignItems:'flex-start', gap:8 } },
-          React.createElement('div', { style:{ flex:1, minWidth:0 } },
-            React.createElement('div', { style:{ fontSize:16, color:C.ink, lineHeight:2 } },
-              onTapWord
-                ? React.createElement(TappableSentence, { sentence:s.ja, onTapWord })
-                : React.createElement(FuriganaSentence, { sentence:s.ja })),
-            s.en && React.createElement('div', { style:{ fontSize:12, color:C.muted, marginTop:6, lineHeight:1.5 } }, s.en)
-          ),
-          React.createElement('button', { onClick:()=>removeSentence(i), title:'Remove this sentence',
-            style:{ background:'none', border:'none', color:C.muted, cursor:'pointer', fontSize:15, flexShrink:0, padding:'2px 4px' } }, '✕')
-        )
+        (!readOnly && editSentIdx === i)
+          ? React.createElement('div', { key:i, style:{
+              paddingTop: i===0?0:12, marginTop: i===0?0:12,
+              borderTop: i===0?'none':`1px solid ${C.line}` } },
+              React.createElement('input', { value:editJa, onChange:e=>setEditJa(e.target.value),
+                placeholder:'Japanese sentence',
+                style:{ width:'100%', padding:'9px 11px', borderRadius:6, border:`1px solid ${C.line}`,
+                  fontSize:15, outline:'none', boxSizing:'border-box', color:C.ink, background:C.card, marginBottom:8 } }),
+              React.createElement('input', { value:editEn, onChange:e=>setEditEn(e.target.value),
+                placeholder:'Translation (optional)',
+                style:{ width:'100%', padding:'9px 11px', borderRadius:6, border:`1px solid ${C.line}`,
+                  fontSize:14, outline:'none', boxSizing:'border-box', color:C.ink, background:C.card, marginBottom:10 } }),
+              React.createElement('div', { style:{ display:'flex', gap:8 } },
+                React.createElement('button', { onClick:cancelEditSentence,
+                  style:{ ...btn(C.line, C.ink), padding:'8px 12px' } }, 'Cancel'),
+                React.createElement('button', { onClick:saveEditSentence, disabled:!editJa.trim(),
+                  style:{ ...btn(editJa.trim()?C.accent:C.line, 'white'), padding:'8px 12px' } }, 'Save')
+              )
+            )
+          : React.createElement('div', { key:i, style:{
+              paddingTop: i===0?0:12, marginTop: i===0?0:12,
+              borderTop: i===0?'none':`1px solid ${C.line}`,
+              display:'flex', alignItems:'flex-start', gap:8 } },
+              React.createElement('div', { style:{ flex:1, minWidth:0 } },
+                React.createElement('div', { style:{ fontSize:16, color:C.ink, lineHeight:2 } },
+                  onTapWord
+                    ? React.createElement(TappableSentence, { sentence:s.ja, onTapWord })
+                    : React.createElement(FuriganaSentence, { sentence:s.ja })),
+                s.en && React.createElement('div', { style:{ fontSize:12, color:C.muted, marginTop:6, lineHeight:1.5 } }, s.en)
+              ),
+              !readOnly && React.createElement('button', { onClick:()=>startEditSentence(i), title:'Edit this sentence',
+                style:{ background:'none', border:'none', color:C.muted, cursor:'pointer', fontSize:15, flexShrink:0, padding:'2px 4px' } }, '✎'),
+              !readOnly && React.createElement('button', { onClick:()=>removeSentence(i), title:'Remove this sentence',
+                style:{ background:'none', border:'none', color:C.muted, cursor:'pointer', fontSize:15, flexShrink:0, padding:'2px 4px' } }, '✕')
+            )
       )
     ),
-    // Add-sentence inline form / button
-    addingSentence
+    // Add-sentence inline form / button (edit mode only)
+    !readOnly && (addingSentence
       ? React.createElement('div', { style:{ border:`1px solid ${C.line}`, borderRadius:8, padding:12, marginBottom:6 } },
           React.createElement('input', { value:newJa, onChange:e=>setNewJa(e.target.value),
             placeholder:'Japanese sentence',
@@ -1411,16 +1726,19 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
           )
         )
       : React.createElement('button', { onClick:()=>setAddingSentence(true),
-          style:{ ...btn(C.card, C.accent), border:`1px dashed ${C.accent}`, padding:'9px 12px', width:'100%' } }, '+ Add sentence')
+          style:{ ...btn(C.card, C.accent), border:`1px dashed ${C.accent}`, padding:'9px 12px', width:'100%' } }, '+ Add sentence'))
   );
+
+  // View mode: sentences are read-only. Edit form: full add/remove controls.
+  const viewBody = isEdit && renderSentences(true);
 
   // Editable form body
   const formBody = React.createElement(React.Fragment, null,
     React.createElement(FormField, { key:'w', label:'Word *', value:word, setter:setWord, placeholder:'失敗', clearError }),
     React.createElement(FormField, { key:'r', label:'Reading', value:reading, setter:setReading, placeholder:'シッパイ', hint:'Kana reading (optional)', clearError }),
     React.createElement(FormField, { key:'m', label:'Meanings *', value:meanings, setter:setMeanings, placeholder:'failure, mistake', hint:'Comma-separated', clearError }),
-    React.createElement(FormField, { key:'s', label:'Example sentence', value:sentence, setter:setSentence, placeholder:'彼は失敗した。', clearError }),
-    React.createElement(FormField, { key:'t', label:'Translation', value:sentenceEn, setter:setSentenceEn, placeholder:'He failed.', clearError }),
+    React.createElement('div', { key:'slabel', style:{ fontSize:12, fontWeight:600, color:C.ink, marginBottom:6 } }, 'Example sentences'),
+    React.createElement('div', { key:'smgr', style:{ marginBottom:14 } }, renderSentences(false)),
     error && React.createElement('div', { style:{ color:C.wrong, fontSize:12, marginBottom:12 } }, error),
     React.createElement('div', { style:{ display:'flex', gap:10 } },
       React.createElement('button', { onClick: isEdit ? () => setEditingFields(false) : onClose, style:btn(C.line, C.ink) }, isEdit ? 'Back' : 'Cancel'),
@@ -1435,26 +1753,35 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
       style:{ background:C.paper, borderRadius:'16px 16px 0 0', padding:24,
         width:'100%', maxWidth:480, maxHeight:'85vh', overflowY:'auto' }},
       React.createElement('div', { style:{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:16 } },
-        React.createElement('div', null,
-          React.createElement('div', { style:{ fontSize:26, fontWeight:700, color:C.ink, lineHeight:1.1 } },
-            isEdit && !editingFields ? editItem.word : (isEdit ? 'Edit word' : 'Add word')),
-          isEdit && !editingFields && editItem.reading &&
-            React.createElement('div', { style:{ fontSize:14, color:C.muted, marginTop:2 } },
-              React.createElement(KanaReading, { word:editItem.word, fallback:editItem.reading }))
+        React.createElement('div', { style:{ flex:1, minWidth:0 } },
+          isEdit && !editingFields
+            ? React.createElement(React.Fragment, null,
+                React.createElement('div', { style:{ display:'flex', alignItems:'baseline', gap:10, flexWrap:'wrap' } },
+                  React.createElement('span', { style:{ fontSize:26, fontWeight:700, color:C.ink, lineHeight:1.1 } }, editItem.word),
+                  editItem.reading && React.createElement('span', { style:{ fontSize:14, color:C.muted } },
+                    React.createElement(KanaReading, { word:editItem.word, fallback:editItem.reading }))
+                ),
+                React.createElement('div', { style:{ fontSize:13, color:C.muted, marginTop:6, lineHeight:1.6 } },
+                  (editItem.meanings||[]).join(', '))
+              )
+            : React.createElement('div', { style:{ fontSize:26, fontWeight:700, color:C.ink, lineHeight:1.1 } },
+                isEdit ? 'Edit word' : 'Add word')
         ),
         React.createElement('button', { onClick:onClose, style:{ background:'none', border:'none', fontSize:20, cursor:'pointer', color:C.muted } }, '✕')
       ),
-      (isEdit && !editingFields) ? React.createElement(React.Fragment, null, actionRow, viewBody) : formBody
+      (isEdit && !editingFields) ? React.createElement(React.Fragment, null, viewBody, actionRow) : formBody
     )
   );
 }
 
 // ── Account screen — full page for sync ID management ────────────────────
-function AccountScreen({ onClose, onReset, onClearWords, sessionSize, onSessionSize, masteryTarget, onMasteryTarget, theme, onToggleTheme }) {
+function AccountScreen({ onClose, onReset, onClearWords, sessionSize, onSessionSize, masteryTarget, onMasteryTarget,
+    theme, onSetTheme, customAccent, customBase, onSetCustomColors, firstRun }) {
   const [userId, setUserIdState] = React.useState(getUserId());
   const [input, setInput] = React.useState('');
   const [copied, setCopied] = React.useState(false);
   const [sizeInput, setSizeInput] = React.useState(String(sessionSize || 10));
+  const [accentDraft, setAccentDraft] = React.useState(customAccent || '#6b4a8f');
 
   const copy = () => {
     navigator.clipboard.writeText(userId).then(() => {
@@ -1464,39 +1791,61 @@ function AccountScreen({ onClose, onReset, onClearWords, sessionSize, onSessionS
 
   const apply = () => {
     if (!input.trim()) return;
-    if (!confirm('Switch to this account? The app will reload and pull data from the new ID.')) return;
-    setUserId(input.trim());
-    location.reload();
+    askConfirm('Switch to this account? The app will reload and pull data from the new ID.', { confirmLabel: 'Switch' }).then(ok => {
+      if (!ok) return;
+      setUserId(input.trim());
+      location.reload();
+    });
   };
 
-  return React.createElement('div', { style: { maxWidth: 460, margin: '0 auto', padding: 24 } },
-    React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 } },
-      React.createElement('div', { style: { fontSize: 22, fontWeight: 700, color: C.ink } }, 'Account & Sync'),
-      onClose && React.createElement('button', { onClick: onClose,
-        style: { background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: C.muted } }, '✕')
-    ),
+  const PRESET_ACCENTS = ['#6b4a8f', '#3b6ea5', '#2e8b6f', '#b5642e', '#a83b5c', '#5a5a8c', '#7a8c3b'];
 
-    // Appearance / dark-mode toggle
-    React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-      background: C.card, border: `1px solid ${C.line}`, borderRadius: 10, padding: '14px 16px', marginBottom: 28 } },
-      React.createElement('div', null,
-        React.createElement('div', { style: { fontSize: 14, fontWeight: 600, color: C.ink } }, 'Dark mode'),
-        React.createElement('div', { style: { fontSize: 12, color: C.muted, marginTop: 2 } }, theme === 'dark' ? 'On' : 'Off')
-      ),
-      React.createElement('button', {
-        onClick: onToggleTheme,
-        role: 'switch', 'aria-checked': theme === 'dark',
-        style: { position: 'relative', width: 52, height: 30, borderRadius: 999, border: 'none',
-          background: theme === 'dark' ? C.gold : C.line, cursor: 'pointer', transition: 'background 0.2s', padding: 0, flexShrink: 0 }
-      },
-        React.createElement('span', {
-          style: { position: 'absolute', top: 3, left: theme === 'dark' ? 25 : 3, width: 24, height: 24,
-            borderRadius: '50%', background: '#fff', transition: 'left 0.2s',
-            boxShadow: '0 1px 3px rgba(0,0,0,0.3)' }
-        })
+  // Theme selector: Light / Dark / Custom
+  const themeSelector = React.createElement('div', { style: { marginBottom: 28 } },
+    React.createElement('div', { style: { fontSize: 14, fontWeight: 600, color: C.ink, marginBottom: 10 } }, 'Appearance'),
+    React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: theme === 'custom' ? 14 : 0 } },
+      ['light', 'dark', 'custom'].map(t =>
+        React.createElement('button', { key: t, onClick: () => t === 'custom' ? onSetCustomColors(accentDraft, customBase) : onSetTheme(t),
+          style: { flex: 1, padding: '10px', borderRadius: 8, textTransform: 'capitalize',
+            border: `2px solid ${theme === t ? C.accent : C.line}`,
+            background: theme === t ? C.accent : C.card,
+            color: theme === t ? 'white' : C.ink, fontWeight: 600, cursor: 'pointer', fontSize: 13 } }, t)
       )
     ),
+    theme === 'custom' && React.createElement('div', { style: { background: C.card, border: `1px solid ${C.line}`, borderRadius: 10, padding: 14 } },
+      React.createElement('div', { style: { fontSize: 12, color: C.muted, marginBottom: 10 } }, 'Pick an accent color — the rest of the palette is derived from it.'),
+      React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 } },
+        PRESET_ACCENTS.map(hex =>
+          React.createElement('button', { key: hex, onClick: () => { setAccentDraft(hex); onSetCustomColors(hex, customBase); },
+            style: { width: 32, height: 32, borderRadius: '50%', background: hex, cursor: 'pointer',
+              border: `2px solid ${customAccent === hex ? C.ink : 'transparent'}`, boxShadow: '0 1px 2px rgba(0,0,0,0.2)' } })
+        )
+      ),
+      React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 } },
+        React.createElement('input', { type: 'color', value: accentDraft,
+          onChange: e => { setAccentDraft(e.target.value); onSetCustomColors(e.target.value, customBase); },
+          style: { width: 44, height: 36, border: 'none', background: 'none', cursor: 'pointer', padding: 0 } }),
+        React.createElement('input', { value: accentDraft,
+          onChange: e => setAccentDraft(e.target.value),
+          onBlur: () => { if (/^#?[0-9a-fA-F]{6}$/.test(accentDraft)) onSetCustomColors(accentDraft.startsWith('#') ? accentDraft : '#' + accentDraft, customBase); },
+          placeholder: '#6b4a8f',
+          style: { flex: 1, padding: '8px 11px', borderRadius: 6, border: `1px solid ${C.line}`,
+            fontSize: 14, fontFamily: 'monospace', outline: 'none', boxSizing: 'border-box', color: C.ink, background: C.paper } })
+      ),
+      React.createElement('div', { style: { display: 'flex', gap: 8 } },
+        ['light', 'dark'].map(b =>
+          React.createElement('button', { key: b, onClick: () => onSetCustomColors(null, b),
+            style: { flex: 1, padding: '8px', borderRadius: 6, textTransform: 'capitalize',
+              border: `2px solid ${customBase === b ? C.accent : C.line}`,
+              background: customBase === b ? C.accent : C.paper,
+              color: customBase === b ? 'white' : C.ink, fontWeight: 600, cursor: 'pointer', fontSize: 12 } }, b + ' base')
+        )
+      )
+    )
+  );
 
+  // Sync ID block (shown above login)
+  const syncBlock = React.createElement(React.Fragment, null,
     React.createElement('div', { style: { fontSize: 14, color: C.ink, fontWeight: 600, marginBottom: 8 } }, 'Your Sync ID'),
     React.createElement('div', { style: { color: C.muted, fontSize: 13, marginBottom: 12, lineHeight: 1.6 } },
       'This ID is your account. Copy it and paste it on your other devices to share the same words and progress.'),
@@ -1506,8 +1855,45 @@ function AccountScreen({ onClose, onReset, onClearWords, sessionSize, onSessionS
     }, userId),
     React.createElement('button', { onClick: copy,
       style: { ...btn(C.accent, 'white'), flex: 'unset', width: '100%', marginBottom: 28 }
-    }, copied ? '✓ Copied to clipboard' : 'Copy my Sync ID'),
+    }, copied ? '✓ Copied to clipboard' : 'Copy my Sync ID')
+  );
 
+  // Login block
+  const loginBlock = React.createElement(React.Fragment, null,
+    React.createElement('div', { style: { fontSize: 14, color: C.ink, fontWeight: 600, marginBottom: 8 } }, 'Log in on this device'),
+    React.createElement('div', { style: { color: C.muted, fontSize: 13, marginBottom: 12, lineHeight: 1.6 } },
+      'Paste a Sync ID from another device to load its words and progress here.'),
+    React.createElement('input', {
+      value: input, onChange: e => setInput(e.target.value),
+      placeholder: 'Paste a Sync ID…',
+      style: { width: '100%', padding: '12px 14px', borderRadius: 8, border: `1px solid ${C.line}`,
+        fontSize: 13, fontFamily: 'monospace', outline: 'none', boxSizing: 'border-box', marginBottom: 10, color: C.ink, background: C.card }
+    }),
+    React.createElement('button', { onClick: apply, disabled: !input.trim(),
+      style: { ...btn(input.trim() ? C.accent : C.line, 'white'), flex: 'unset', width: '100%', marginBottom: 28 }
+    }, 'Switch to this account')
+  );
+
+  // First-run: only show the login block (new users sync here, nothing else)
+  if (firstRun) {
+    return React.createElement('div', { style: { maxWidth: 460, margin: '0 auto', padding: 24 } },
+      React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 } },
+        React.createElement('div', { style: { fontSize: 22, fontWeight: 700, color: C.ink } }, 'Log in'),
+        onClose && React.createElement('button', { onClick: onClose,
+          style: { background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: C.muted } }, '✕')
+      ),
+      loginBlock
+    );
+  }
+
+  return React.createElement('div', { style: { maxWidth: 460, margin: '0 auto', padding: 24 } },
+    React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 } },
+      React.createElement('div', { style: { fontSize: 22, fontWeight: 700, color: C.ink } }, 'Account & Sync'),
+      onClose && React.createElement('button', { onClick: onClose,
+        style: { background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: C.muted } }, '✕')
+    ),
+
+    themeSelector,
     React.createElement('div', { style: { height: 1, background: C.line, marginBottom: 24 } }),
 
     React.createElement('div', { style: { fontSize: 14, color: C.ink, fontWeight: 600, marginBottom: 8 } }, 'Words per session'),
@@ -1553,19 +1939,8 @@ function AccountScreen({ onClose, onReset, onClearWords, sessionSize, onSessionS
     ),
 
     React.createElement('div', { style: { height: 1, background: C.line, marginBottom: 24 } }),
-
-    React.createElement('div', { style: { fontSize: 14, color: C.ink, fontWeight: 600, marginBottom: 8 } }, 'Log in on this device'),
-    React.createElement('div', { style: { color: C.muted, fontSize: 13, marginBottom: 12, lineHeight: 1.6 } },
-      'Paste a Sync ID from another device to load its words and progress here.'),
-    React.createElement('input', {
-      value: input, onChange: e => setInput(e.target.value),
-      placeholder: 'Paste a Sync ID…',
-      style: { width: '100%', padding: '12px 14px', borderRadius: 8, border: `1px solid ${C.line}`,
-        fontSize: 13, fontFamily: 'monospace', outline: 'none', boxSizing: 'border-box', marginBottom: 10, color: C.ink, background: C.card }
-    }),
-    React.createElement('button', { onClick: apply, disabled: !input.trim(),
-      style: { ...btn(input.trim() ? C.accent : C.line, 'white'), flex: 'unset', width: '100%', marginBottom: 28 }
-    }, 'Switch to this account'),
+    syncBlock,
+    loginBlock,
 
     onReset && React.createElement(React.Fragment, null,
       React.createElement('div', { style: { height: 1, background: C.line, marginBottom: 24 } }),
@@ -1592,7 +1967,7 @@ function AddListForm({ onMerge, onClose }) {
     setTimeout(() => {
       const parsed = parseLLN(raw);
       setLoading(false);
-      if (!parsed) { setError("Couldn't read this — make sure it's a Language Reactor CSV or JSON export."); return; }
+      if (!parsed) { setError("Couldn't read this file. Supported: Language Reactor (.csv/.json), the app's export (.json), or Takoboto/Anki (.txt)."); return; }
       const result = onMerge(parsed);
       const added = typeof result === 'object' ? result.added : result;
       const enriched = typeof result === 'object' ? result.enriched : 0;
@@ -1624,32 +1999,20 @@ function AddListForm({ onMerge, onClose }) {
         React.createElement('button', { onClick: onClose, style: { background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: C.muted } }, '✕')
       ),
       React.createElement('div', { style: { fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 } },
-        'New words are added on top of your existing list. Duplicates are skipped.'),
+        'New words are added on top of your existing list. Duplicate words gain the new example sentences.'),
       React.createElement('input', { ref: inputRef, type: 'file', accept: '.json,.csv,.txt', onChange: onFileChange, style: { display: 'none' } }),
       React.createElement('button', { onClick: () => inputRef.current && inputRef.current.click(), disabled: loading,
-        style: { width: '100%', padding: '16px', borderRadius: 12, border: `2px dashed ${C.line}`,
-          background: C.card, cursor: 'pointer', marginBottom: 14, boxSizing: 'border-box' }},
-                React.createElement('div', { style: { fontSize: 15, fontWeight: 700, color: C.ink } }, loading ? 'Loading…' : 'Choose file')
+        style: { width: '100%', padding: '18px', borderRadius: 12, border: `2px dashed ${C.line}`,
+          background: C.card, cursor: 'pointer', boxSizing: 'border-box' }},
+        React.createElement('div', { style: { fontSize: 15, fontWeight: 700, color: C.ink } }, loading ? 'Loading…' : 'Upload file'),
+        React.createElement('div', { style: { fontSize: 12, color: C.muted, marginTop: 3 } }, '.csv, .json, or .txt')
       ),
-      React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 } },
-        React.createElement('div', { style: { flex: 1, height: 1, background: C.line } }),
-        React.createElement('div', { style: { fontSize: 12, color: C.muted } }, 'or paste'),
-        React.createElement('div', { style: { flex: 1, height: 1, background: C.line } })
-      ),
-      React.createElement('textarea', { value: text, onChange: e => { setText(e.target.value); setError(''); },
-        placeholder: 'Paste CSV/JSON here…',
-        style: { width: '100%', height: 90, padding: 12, borderRadius: 8,
-          border: `2px solid ${error ? C.wrong : C.line}`, fontSize: 12, resize: 'vertical',
-          outline: 'none', boxSizing: 'border-box', color: C.ink, background: C.card } }),
-      error && React.createElement('div', { style: { color: C.wrong, fontSize: 12, marginTop: 6 } }, error),
-      text.trim() && React.createElement('button', { onClick: () => process(text), disabled: loading,
-        style: { ...btn(C.accent, 'white'), flex: 'unset', width: '100%', marginTop: 10 }
-      }, loading ? 'Loading…' : 'Add words')
+      error && React.createElement('div', { style: { color: C.wrong, fontSize: 12, marginTop: 10, padding: '8px 12px', background: C.softRed, borderRadius: 8 } }, error)
     )
   );
 }
 
-function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetWord, onMarkMastered, activeIds, onAddToActive, onRemoveFromActive, masteryTarget, onTapKanji, onTapWord }) {
+function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetWord, onMarkMastered, activeIds, onAddToActive, onRemoveFromActive, masteryTarget, onTapKanji, onTapWord, onReshuffle }) {
   const [showAdd, setShowAdd] = useState(false);
   const [showAddList, setShowAddList] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -1673,6 +2036,14 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
   const unseen = items.filter(it=>!(progress[it.id]?.correct||progress[it.id]?.wrong)).length;
 
   const q = search.trim().toLowerCase();
+  // If the query has 2+ distinct kanji (e.g. a pasted sentence), switch to
+  // "kanji-set" mode: show any saved word that shares a kanji with the query.
+  const qKanjiSet = (() => {
+    const set = new Set([...search].filter(ch => isKanjiChar(ch)));
+    return set.size >= 2 ? set : null;
+  })();
+  // Leading kanji stem of the query (for okurigana-tolerant matching: 遊び↔遊ぶ).
+  const qStem = kanjiStem(search.trim());
   const filtered = items.filter(it => {
     // category filter
     const p = progress[it.id] || {};
@@ -1683,10 +2054,59 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
     if (filter==='new' && total>0) return false;
     // search filter
     if (!q) return true;
-    return it.word.toLowerCase().includes(q)
-      || (it.reading||'').toLowerCase().includes(q)
-      || it.meanings.some(m => m.toLowerCase().includes(q));
+    // sentence-paste mode: match words that share any kanji with the query
+    if (qKanjiSet) return [...it.word].some(ch => qKanjiSet.has(ch));
+    // normal search — matches word, reading (kana OR romaji), or meaning
+    if (it.word.toLowerCase().includes(q)) return true;
+    if ((it.reading||'').toLowerCase().includes(q)) return true;
+    // meaning match: each meaningful query word must START a word in the meaning
+    // (so "ins" finds "inside"/"insect" but NOT "rinse"). Filler words like
+    // "to"/"a"/"the" are ignored, so "to wash" matches a meaning stored as "wash".
+    const STOP = new Set(['to','a','an','the','of','for','in','on','at','be','is','one','s']);
+    let qWords = q.split(/\s+/).filter(Boolean);
+    const qContent = qWords.filter(w => !STOP.has(w));
+    if (qContent.length) qWords = qContent; // keep filler only if that's all there is
+    const meaningMatch = it.meanings.some(m => {
+      const mWords = m.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+      return qWords.every(qw => mWords.some(mw => mw.startsWith(qw)));
+    });
+    if (meaningMatch) return true;
+    // cross-script reading match: normalize both query and reading to romaji
+    const qKey = readingSearchKey(q);
+    if (qKey && readingSearchKey(it.reading||'').includes(qKey)) return true;
+    // okurigana-tolerant: same leading kanji stem (遊び finds 遊ぶ, 食べる finds 食う)
+    if (qStem && kanjiStem(it.word) === qStem) return true;
+    return false;
   });
+
+  // Whether a word is an *exact* hit for the current query (word or reading == q).
+  const isExactMatch = it => {
+    if (!q) return false;
+    const w = it.word.toLowerCase();
+    const r = (it.reading||'').toLowerCase();
+    return w===q || r===q || readingSearchKey(r)===readingSearchKey(q);
+  };
+  const sorted = [...filtered].sort((a,b)=>{
+    // When searching, exact matches float to the very top, above partials.
+    if (q) {
+      const ea=isExactMatch(a)?0:1, eb=isExactMatch(b)?0:1;
+      if (ea!==eb) return ea-eb;
+    }
+    if (activeFirst) {
+      const aa=sortActiveSet.has(a.id)?0:1, bb=sortActiveSet.has(b.id)?0:1;
+      if (aa!==bb) return aa-bb;
+    }
+    // "Studying" stays ordered by most-practiced; everything else is
+    // alphabetical by reading (Japanese gojūon order, romaji-aware)
+    if (filter==='studied') {
+      const pa=progress[a.id]||{}, pb=progress[b.id]||{};
+      return ((pb.correct||0)+(pb.wrong||0))-((pa.correct||0)+(pa.wrong||0));
+    }
+    return compareReading(a, b);
+  });
+  // Show each label whenever its group has results (independent of the other).
+  const hasExact = q && sorted.some(isExactMatch);
+  const hasPartial = q && sorted.some(it => !isExactMatch(it));
 
   return (
     <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
@@ -1725,8 +2145,13 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
             background:'none', border:'none', color:C.muted, cursor:'pointer', fontSize:16 } }, '✕')}
       </div>
 
-      {/* Sort toggle */}
-      <div style={{ display:'flex', alignItems:'center', justifyContent:'flex-end', gap:8, marginTop:-6 }}>
+      {/* Sort toggle + shuffle new set */}
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'flex-end', gap:8, marginTop:-6, flexWrap:'wrap' }}>
+        {onReshuffle && <button onClick={()=>{ askConfirm('Shuffle in a new set of words? Your current active set will be replaced (progress is kept).', { confirmLabel: 'Shuffle' }).then(ok => { if (ok) onReshuffle(); }); }}
+          style={{ background:C.card, color:C.muted, border:`1px solid ${C.line}`, borderRadius:6,
+            padding:'5px 10px', fontSize:12, cursor:'pointer' }}>
+          Shuffle new set
+        </button>}
         <button onClick={()=>setActiveFirst(v=>!v)}
           style={{ background: activeFirst ? C.gold : C.card, color: activeFirst ? 'white' : C.muted,
             border:`1px solid ${activeFirst ? C.gold : C.line}`, borderRadius:6,
@@ -1738,26 +2163,19 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
       <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
         {filtered.length === 0 && React.createElement('div', { style:{ textAlign:'center', color:C.muted, fontSize:13, padding:'20px' } },
           q ? 'No words match your search.' : 'No words yet.')}
-        {[...filtered].sort((a,b)=>{
-          if (activeFirst) {
-            const aa=sortActiveSet.has(a.id)?0:1, bb=sortActiveSet.has(b.id)?0:1;
-            if (aa!==bb) return aa-bb;
-          }
-          // "Studying" stays ordered by most-practiced; everything else is
-          // alphabetical by reading (Japanese gojūon order, romaji-aware)
-          if (filter==='studied') {
-            const pa=progress[a.id]||{}, pb=progress[b.id]||{};
-            return ((pb.correct||0)+(pb.wrong||0))-((pa.correct||0)+(pa.wrong||0));
-          }
-          return compareReading(a, b);
-        }).map(item => {
+        {hasExact && React.createElement('div', { key:'lbl-exact', style:{ fontSize:11, color:C.muted, textTransform:'uppercase', letterSpacing:1, fontWeight:600, marginBottom:-2 } }, 'Exact match')}
+        {sorted.map((item, i) => {
           const p=progress[item.id]||{correct:0,wrong:0,streak:0};
           const total=p.correct+p.wrong;
-          const pct=total>0?Math.round((p.correct/total)*100):null;
           const streak=p.streak||0;
           const isMastered=streak>=masteryTarget;
           const inActive=activeIds.includes(item.id);
-          return React.createElement('div', { key:item.id,
+          // Insert a "Partial matches" label at the exact→partial boundary
+          // (or at the very top when there are no exact matches at all).
+          const partialHeader = (hasPartial && !isExactMatch(item) && (i===0 || isExactMatch(sorted[i-1])))
+            ? React.createElement('div', { key:'lbl-partial', style:{ fontSize:11, color:C.muted, textTransform:'uppercase', letterSpacing:1, fontWeight:600, marginTop: i===0?0:8, marginBottom:-2 } }, 'Partial matches')
+            : null;
+          const row = React.createElement('div', { key:item.id,
             style:{ display:'flex', alignItems:'center', gap:10,
               background: isMastered ? C.softGreen : C.card,
               borderRadius:8, padding:'10px 12px',
@@ -1770,14 +2188,14 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
                 React.createElement(KanaReading, { word:item.word, fallback:item.reading })),
               React.createElement('div', { style:{ fontSize:13, color:C.ink, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' } }, item.meanings[0])
             ),
-            React.createElement('div', { style:{ textAlign:'right', fontSize:12, minWidth:40, flexShrink:0 } },
+            React.createElement('div', { style:{ textAlign:'right', fontSize:12, minWidth:48, flexShrink:0 } },
               isMastered
                 ? React.createElement('div', { style:{ color:C.correct, fontWeight:700 } }, 'done')
                 : total===0
                   ? null
                   : React.createElement(React.Fragment, null,
                       React.createElement('div', { style:{ color:streak>0?C.correct:C.muted, fontWeight:700 } }, `${streak}/${masteryTarget}`),
-                      React.createElement('div', { style:{ color:C.muted } }, `${pct}%`)
+                      React.createElement('div', { style:{ color:C.muted, fontSize:11 } }, `✓${p.correct} ✗${p.wrong}`)
                     )
             ),
             // Active-deck toggle — hidden for mastered words (reset to re-add)
@@ -1799,6 +2217,7 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
               style:{ background:'none', border:'none', color:C.muted, cursor:'pointer', fontSize:17, padding:'4px 4px', flexShrink:0 }
             }, '⊙')
           );
+          return partialHeader ? React.createElement(React.Fragment, { key:'frag-'+item.id }, partialHeader, row) : row;
         })}
       </div>
     </div>
@@ -1808,7 +2227,6 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
 function ImportScreen({ onImport, onAccount }) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const [text, setText] = useState('');
   const inputRef = useRef(null);
 
   const process = raw => {
@@ -1816,7 +2234,7 @@ function ImportScreen({ onImport, onAccount }) {
     setTimeout(() => {
       const parsed = parseLLN(raw);
       setLoading(false);
-      if (!parsed) { setError("Couldn't read this — make sure it's a Language Reactor CSV or JSON export."); return; }
+      if (!parsed) { setError("Couldn't read this file. Supported: Language Reactor (.csv/.json), the app's own export (.json), and Takoboto/Anki (.txt)."); return; }
       onImport(parsed);
     }, 50);
   };
@@ -1834,36 +2252,20 @@ function ImportScreen({ onImport, onAccount }) {
       <div style={{ textAlign:'center', marginBottom:28 }}>
         <div style={{ fontSize:48, lineHeight:1, marginBottom:8 }}>漢字</div>
         <div style={{ fontSize:22, fontWeight:700, color:C.ink }}>Kanji Practice</div>
-        <div style={{ fontSize:13, color:C.muted, marginTop:6 }}>Import your Language Reactor word list</div>
+        <div style={{ fontSize:13, color:C.muted, marginTop:6 }}>Upload a word list to get started</div>
       </div>
       <input ref={inputRef} type="file" accept=".json,.csv,.txt" onChange={onFileChange} style={{ display:'none' }} />
       <button onClick={()=>inputRef.current&&inputRef.current.click()} disabled={loading}
-        style={{ width:'100%', padding:'18px', borderRadius:12, border:`2px dashed ${C.line}`,
-          background:C.card, cursor:'pointer', marginBottom:16 }}>
-        <div style={{ fontSize:15, fontWeight:700, color:C.ink }}>{loading?'Loading…':'Choose file'}</div>
-        <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>Works on desktop · may not work on mobile Chrome</div>
+        style={{ width:'100%', padding:'20px', borderRadius:12, border:`2px dashed ${C.line}`,
+          background:C.card, cursor:'pointer', marginBottom:14 }}>
+        <div style={{ fontSize:16, fontWeight:700, color:C.ink }}>{loading?'Loading…':'Upload file'}</div>
+        <div style={{ fontSize:12, color:C.muted, marginTop:3 }}>.csv, .json, or .txt</div>
       </button>
-      <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:14 }}>
-        <div style={{ flex:1, height:1, background:C.line }} />
-        <div style={{ fontSize:12, color:C.muted }}>or paste text</div>
-        <div style={{ flex:1, height:1, background:C.line }} />
-      </div>
-      <textarea value={text} onChange={e=>{ setText(e.target.value); setError(''); }}
-        placeholder="Paste your LLN CSV/JSON export here…"
-        style={{ width:'100%', height:110, padding:12, borderRadius:8,
-          border:`2px solid ${error?C.wrong:C.line}`, fontSize:12, resize:'vertical', outline:'none', color:C.ink, background:C.card }} />
-      {error && <div style={{ color:C.wrong, fontSize:12, marginTop:6, padding:'8px 12px', background:C.softRed, borderRadius:8 }}>{error}</div>}
-      {text.trim() && (
-        <button onClick={()=>process(text)} disabled={loading}
-          style={{ marginTop:10, width:'100%', padding:'14px', borderRadius:8, border:'none',
-            background:C.accent, color:'white', fontSize:15, fontWeight:700, cursor:'pointer' }}>
-          {loading?'Loading…':'Load words'}
-        </button>
-      )}
-      <div style={{ marginTop:18, fontSize:12, color:C.muted, lineHeight:1.8,
+      {error && <div style={{ color:C.wrong, fontSize:12, marginBottom:6, padding:'8px 12px', background:C.softRed, borderRadius:8 }}>{error}</div>}
+      <div style={{ marginTop:6, fontSize:12, color:C.muted, lineHeight:1.8,
         background:C.paperDark, borderRadius:8, padding:'12px 14px' }}>
-        <strong>Export from Language Reactor:</strong><br/>
-        Saved Words → ⋯ menu → Export → TSV/CSV
+        <strong>Supported files:</strong><br/>
+        Language Reactor (.csv / .json), Takoboto or Anki (.txt), or this app's own export (.json).
       </div>
       <button onClick={onAccount}
         style={{ ...btn(C.card,C.ink), border:`1px solid ${C.line}`, flex:'unset', width:'100%', marginTop:16 }}>
@@ -1887,27 +2289,30 @@ function shuffle(arr) {
 }
 
 // ── Read tab — paste text, get furigana + tappable words ────────────────
-function ReadMode({ onTapWord }) {
-  const [raw, setRaw] = useState('');
-  const [processed, setProcessed] = useState(null); // array of paragraph strings, or null
-
+// State (raw/processed) lives in App so it persists across tab switches.
+function ReadMode({ onTapWord, raw, setRaw, processed, setProcessed }) {
   const process = () => {
     const text = raw.trim();
     if (!text) return;
-    // Split into paragraphs on blank lines / newlines, keep non-empty
     const paras = text.split(/\n+/).map(p => p.trim()).filter(Boolean);
     setProcessed(paras);
   };
 
   const reset = () => { setProcessed(null); };
+  const clearAll = () => { setProcessed(null); setRaw(''); };
 
   if (processed) {
-    return React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 16 } },
-      React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+    return React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
+      React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, minHeight: 32 } },
         React.createElement('div', { style: { fontSize: 13, color: C.muted } }, 'Tap any word for its dictionary entry'),
-        React.createElement('button', { onClick: reset,
-          style: { background: C.card, border: `1px solid ${C.line}`, borderRadius: 6,
-            padding: '6px 12px', fontSize: 12, cursor: 'pointer', color: C.ink } }, 'Edit')
+        React.createElement('div', { style: { display: 'flex', gap: 8, flexShrink: 0 } },
+          React.createElement('button', { onClick: reset,
+            style: { background: C.card, border: `1px solid ${C.line}`, borderRadius: 6,
+              padding: '6px 12px', fontSize: 12, cursor: 'pointer', color: C.ink } }, 'Edit'),
+          React.createElement('button', { onClick: clearAll,
+            style: { background: C.card, border: `1px solid ${C.line}`, borderRadius: 6,
+              padding: '6px 12px', fontSize: 12, cursor: 'pointer', color: C.muted } }, 'Clear')
+        )
       ),
       React.createElement('div', { style: { background: C.card, border: `1px solid ${C.line}`,
         borderRadius: 10, padding: '18px 16px', display: 'flex', flexDirection: 'column', gap: 14 } },
@@ -1921,11 +2326,11 @@ function ReadMode({ onTapWord }) {
   }
 
   return React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
-    React.createElement('div', { style: { fontSize: 14, color: C.muted, lineHeight: 1.5 } },
+    React.createElement('div', { style: { fontSize: 13, color: C.muted, lineHeight: 1.5, minHeight: 32, display: 'flex', alignItems: 'center' } },
       'Paste any Japanese text below.'),
     React.createElement('textarea', {
       value: raw, onChange: e => setRaw(e.target.value),
-      placeholder: '日本語のテキストをここに貼り付けてください…',
+      placeholder: '日本語をここに貼り付け…',
       style: { width: '100%', minHeight: 180, padding: 14, borderRadius: 10,
         border: `1px solid ${C.line}`, fontSize: 16, lineHeight: 1.7, resize: 'vertical',
         outline: 'none', boxSizing: 'border-box', background: C.card, color: C.ink }
@@ -1938,7 +2343,7 @@ function ReadMode({ onTapWord }) {
 }
 
 // ── Kanji dictionary tab ─────────────────────────────────────────────────
-function KanjiMode({ items, onTapWord }) {
+function KanjiMode({ items, onTapWord, onEditWord, onPopupKanji }) {
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState(null);
   const scrollRef = React.useRef(0);
@@ -1961,7 +2366,21 @@ function KanjiMode({ items, onTapWord }) {
 
   const allKanji = Object.keys(kanjiMap).sort((a,b) => kanjiMap[b].length - kanjiMap[a].length);
   const q = search.trim();
-  const filtered = q ? allKanji.filter(k => k.includes(q)) : allKanji;
+  // Pull out every distinct kanji char in the query. Paste a whole sentence and
+  // it shows a tile for each kanji that appears in your saved words (others are
+  // skipped). A single-kanji search is just the one-character case.
+  const queryKanji = [...new Set([...q].filter(ch => isKanjiChar(ch)))];
+  let filtered;
+  if (!q) {
+    filtered = allKanji;
+  } else if (queryKanji.length > 0) {
+    const want = new Set(queryKanji);
+    // keep grid order (by frequency), restricted to the kanji in the query
+    filtered = allKanji.filter(k => want.has(k));
+  } else {
+    // no kanji typed (e.g. kana/romaji) → fall back to substring match
+    filtered = allKanji.filter(k => k.includes(q));
+  }
 
   // Detail view for a single kanji
   if (selected) {
@@ -1980,8 +2399,10 @@ function KanjiMode({ items, onTapWord }) {
             style:{ display:'flex', alignItems:'center', gap:12, background:C.card,
               borderRadius:8, padding:'10px 14px', border:`1px solid ${C.line}` }},
             React.createElement('div', { style:{ fontSize:22, fontWeight:700, color:C.ink, minWidth:44 } },
-              React.createElement(TappableKanji, { text:w.word, onTapKanji:openKanji })),
-            React.createElement('div', { style:{ flex:1, minWidth:0 } },
+              React.createElement(TappableKanji, { text:w.word, onTapKanji:(onPopupKanji || openKanji) })),
+            React.createElement('div', { onClick:()=>onEditWord && onEditWord(w),
+              title:'Tap to edit',
+              style:{ flex:1, minWidth:0, cursor:onEditWord?'pointer':'default' } },
               React.createElement('div', { style:{ fontSize:12, color:C.muted } },
                 React.createElement(KanaReading, { word:w.word, fallback:w.reading })),
               React.createElement('div', { style:{ fontSize:13, color:C.ink, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' } }, w.meanings[0])
@@ -2052,10 +2473,20 @@ function App() {
   const [kanjiPopup, setKanjiPopup] = useState(null);
   const [wordPopup, setWordPopup] = useState(null);
   const [theme, setTheme] = useState(loadTheme);
-  const toggleTheme = () => {
-    const next = theme === 'dark' ? 'light' : 'dark';
-    applyTheme(next);
-    setTheme(next);
+  const [customAccent, setCustomAccent] = useState(loadCustomAccent);
+  const [customBase, setCustomBase] = useState(loadCustomBase);
+  const [readRaw, setReadRaw] = useState('');
+  const [readProcessed, setReadProcessed] = useState(null);
+  const [furigana, setFuriganaState] = useState(() => localStorage.getItem('kanji-furigana') !== 'off');
+  const toggleFurigana = () => setFuriganaState(f => { const next = !f; try { localStorage.setItem('kanji-furigana', next ? 'on' : 'off'); } catch {} return next; });
+  const [showStrokes, setShowStrokesState] = useState(() => localStorage.getItem('kanji-strokes') !== 'off');
+  const toggleStrokes = () => setShowStrokesState(s => { const next = !s; try { localStorage.setItem('kanji-strokes', next ? 'on' : 'off'); } catch {} return next; });
+  const [editWordTarget, setEditWordTarget] = useState(null); // word being edited from practice tabs
+  const setThemeMode = (next) => { applyTheme(next); setTheme(next); };
+  const setCustomColors = (accent, base) => {
+    if (accent != null) { localStorage.setItem(CUSTOM_ACCENT_KEY, accent); setCustomAccent(accent); }
+    if (base != null) { localStorage.setItem(CUSTOM_BASE_KEY, base); setCustomBase(base); }
+    applyTheme('custom'); setTheme('custom');
   };
   useEffect(() => { applyTheme(theme); }, []);
 
@@ -2237,8 +2668,10 @@ function App() {
     });
   };
   const resetProgress = () => {
-    if (!confirm('Reset all your progress?')) return;
-    setProgress({}); storageSet(PROGRESS_KEY, {}); setActiveIds(null); storageSet(DECK_KEY, null);
+    askConfirm('Reset all your progress?', { confirmLabel: 'Reset', danger: true }).then(ok => {
+      if (!ok) return;
+      setProgress({}); storageSet(PROGRESS_KEY, {}); setActiveIds(null); storageSet(DECK_KEY, null);
+    });
   };
   const resetWord = (id) => {
     setProgress(prev => {
@@ -2267,8 +2700,10 @@ function App() {
     persistDeck(nextDeck);
   };
   const clearWords = () => {
-    if (!confirm('Load a new word list? This won\'t delete your progress.')) return;
-    setItems(null); storageSet(WORDS_KEY, null); setActiveIds(null); storageSet(DECK_KEY, null);
+    askConfirm("Load a new word list? This won't delete your progress.", { confirmLabel: 'Continue' }).then(ok => {
+      if (!ok) return;
+      setItems(null); storageSet(WORDS_KEY, null); setActiveIds(null); storageSet(DECK_KEY, null);
+    });
   };
 
   if (!ready) return React.createElement('div', {
@@ -2277,12 +2712,17 @@ function App() {
 
   if (showAccount) return React.createElement('div', {
     style:{ minHeight:'100vh', background:C.paper, paddingTop:20 }},
-    React.createElement(AccountScreen, { onClose:()=>setShowAccount(false), onReset:resetProgress,
-      onClearWords:clearWords, sessionSize, onSessionSize:setSessionSize,
-      masteryTarget, onMasteryTarget:setMasteryTarget, theme, onToggleTheme:toggleTheme }));
+    React.createElement(ConfirmHost),
+    React.createElement(AccountScreen, { onClose:()=>setShowAccount(false),
+      onReset: items ? resetProgress : null, onClearWords: items ? clearWords : null,
+      sessionSize, onSessionSize:setSessionSize,
+      masteryTarget, onMasteryTarget:setMasteryTarget,
+      theme, onSetTheme:setThemeMode, customAccent, customBase, onSetCustomColors:setCustomColors,
+      firstRun: !items }));
 
   if (!items) return React.createElement('div', {
     style:{ minHeight:'100vh', background:C.paper, display:'flex', alignItems:'center' }},
+    React.createElement(ConfirmHost),
     React.createElement(ImportScreen, { onImport:handleImport, onAccount:()=>setShowAccount(true) }));
 
   // Active deck: the words for this session, in shuffled display order.
@@ -2308,74 +2748,44 @@ function App() {
   // so the position survives tab switches and is shared between Write & Quiz.
   const advanceDeck = () => { setDeckIdx(i => deck.length ? (i + 1) % deck.length : 0); };
 
-  // Swipe between main tabs (left/right). Account (⚙) is excluded — it's an overlay.
-  const swipeTabs = ['write','quiz','words','read','kanji'];
-  const onTouchStart = (e) => {
-    // Ignore swipes that begin on the drawing canvas (so writing doesn't switch tabs)
-    if (e.target && e.target.tagName === 'CANVAS') { touchStartRef.current = null; return; }
-    const t = e.touches && e.touches[0];
-    touchStartRef.current = t ? { x: t.clientX, y: t.clientY } : null;
-  };
-  const onTouchEnd = (e) => {
-    const start = touchStartRef.current;
-    touchStartRef.current = null;
-    if (!start) return;
-    const t = e.changedTouches && e.changedTouches[0];
-    if (!t) return;
-    const dx = t.clientX - start.x, dy = t.clientY - start.y;
-    // Require a mostly-horizontal swipe of decent length
-    if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
-    const cur = swipeTabs.indexOf(mode);
-    if (cur === -1) return;
-    const nextIdx = dx < 0 ? cur + 1 : cur - 1; // swipe left → next tab
-    if (nextIdx < 0 || nextIdx >= swipeTabs.length) return;
-    setMode(swipeTabs[nextIdx]);
-  };
-
   const masteredCount = items.filter(it => (progress[it.id]?.streak||0) >= masteryTarget).length;
   const allMastered = masteredCount === items.length && items.length > 0;
 
   return React.createElement('div', { style:{ minHeight:'100vh', background:C.paper } },
-    React.createElement('div', { style:{ background:C.header, color:'white', padding:'12px 14px',
+    React.createElement(ConfirmHost),
+    React.createElement('div', { style:{ background:C.header, color:bestText(C.header), padding:'12px 14px',
       display:'flex', alignItems:'center', justifyContent:'space-between', gap:8, flexWrap:'wrap' }},
       React.createElement('div', { style:{ fontSize:18, fontWeight:700, flexShrink:0 } }, '漢字'),
       React.createElement('div', { style:{ display:'flex', gap:1, flexWrap:'wrap', justifyContent:'flex-end' } },
         [['write','Write'],['quiz','Quiz'],['words','Words'],['read','Read'],['kanji','Dict'],['account','⚙']].map(([m,label])=>
           React.createElement('button', { key:m, onClick:()=> m==='account' ? setShowAccount(true) : setMode(m), style:{
             padding:'6px 7px', borderRadius:6, border:'none',
-            background:mode===m?'rgba(255,255,255,0.2)':'transparent',
-            color:'white', fontSize:12, cursor:'pointer', whiteSpace:'nowrap' }}, label)
+            background:mode===m? (bestText(C.header)==='white'?'rgba(255,255,255,0.2)':'rgba(0,0,0,0.12)') :'transparent',
+            color:bestText(C.header), fontSize:12, cursor:'pointer', whiteSpace:'nowrap' }}, label)
         )
       )
     ),
     kanjiPopup && React.createElement(KanjiPopup, { char:kanjiPopup, onClose:()=>setKanjiPopup(null), items }),
     wordPopup && React.createElement(WordPopup, { token:wordPopup, onClose:()=>setWordPopup(null),
       existing:items, onAdd:(w)=>handleAdd(w) }),
-    React.createElement('div', { style:{ maxWidth:420, margin:'0 auto', padding:20, minHeight:'calc(100vh - 60px)' },
-      onTouchStart, onTouchEnd },
-      // Session controls bar (only on practice tabs)
-      (mode==='write' || mode==='quiz') && React.createElement('div', {
-        style:{ display:'flex', alignItems:'center', justifyContent:'flex-end',
-          marginBottom:16, fontSize:12, color:C.muted, gap:6, flexWrap:'wrap' }},
-        React.createElement('button', { onClick:()=>{ const id=currentWordRef.current; if(id){ markMastered(id); advanceDeck(); } },
-          style:{ background:C.card, border:`1px solid ${C.correct}`, borderRadius:6,
-            padding:'5px 10px', fontSize:12, cursor:'pointer', color:C.correct, flexShrink:0 } }, 'Mastered'),
-        React.createElement('button', { onClick:()=>{ const id=currentWordRef.current; if(id){ const w=idToItem[id]; if(w && confirm(`Delete "${w.word}"?`)) handleRemove(id); } },
-          style:{ background:C.card, border:`1px solid ${C.line}`, borderRadius:6,
-            padding:'5px 10px', fontSize:12, cursor:'pointer', color:C.wrong, flexShrink:0 } }, 'Delete'),
-        React.createElement('button', { onClick:()=>{ if(confirm('Shuffle in a new set of words? Your current active set will be replaced (progress is kept).')) reshuffle(); },
-          style:{ background:C.card, border:`1px solid ${C.line}`, borderRadius:6,
-            padding:'5px 10px', fontSize:12, cursor:'pointer', color:C.ink, flexShrink:0 } }, 'New set')
-      ),
+    editWordTarget && React.createElement(AddWordForm, { editItem:editWordTarget,
+      onAdd:(w)=>handleEdit(editWordTarget.id, w), onClose:()=>setEditWordTarget(null),
+      progress, masteryTarget,
+      onRemove:()=>{ handleRemove(editWordTarget.id); setEditWordTarget(null); },
+      onResetWord:()=>{ resetWord(editWordTarget.id); },
+      onMarkMastered:()=>{ markMastered(editWordTarget.id); setEditWordTarget(null); advanceDeck(); },
+      onTapWord:setWordPopup }),
+    React.createElement('div', { style:{ maxWidth:420, margin:'0 auto', padding:20, minHeight:'calc(100vh - 60px)' } },
       mode==='write' && (deckEmpty
         ? React.createElement('div', { style:{ textAlign:'center', color:C.muted, padding:'40px 20px' } }, 'No active words. Add some in the Words tab.')
-        : React.createElement(WriteMode, { items:deck, progress, idx:Math.min(deckIdx, deck.length-1), onAdvance:advanceDeck, onAnswer:handleAnswer, onCurrentWord:(id)=>{currentWordRef.current=id;}, onTapKanji:setKanjiPopup, onTapWord:setWordPopup })),
+        : React.createElement(WriteMode, { items:deck, progress, idx:Math.min(deckIdx, deck.length-1), onAdvance:advanceDeck, onAnswer:handleAnswer, onCurrentWord:(id)=>{currentWordRef.current=id;}, onTapKanji:setKanjiPopup, onTapWord:setWordPopup, onEditWord:setEditWordTarget, furigana, onToggleFurigana:toggleFurigana, showStrokes, onToggleStrokes:toggleStrokes })),
       mode==='quiz' && (deckEmpty
         ? React.createElement('div', { style:{ textAlign:'center', color:C.muted, padding:'40px 20px' } }, 'No active words. Add some in the Words tab.')
-        : React.createElement(QuizMode, { items:deck, progress, idx:Math.min(deckIdx, deck.length-1), onAdvance:advanceDeck, onAnswer:handleAnswer, onCurrentWord:(id)=>{currentWordRef.current=id;}, onTapKanji:setKanjiPopup, onTapWord:setWordPopup })),
-      mode==='words' && React.createElement(WordsMode, { items, progress, onRemove:handleRemove, onAdd:handleAdd, onEdit:handleEdit, onMerge:handleMerge, onResetWord:resetWord, onMarkMastered:markMastered, activeIds:activeIds||[], onAddToActive:addToActive, onRemoveFromActive:removeFromActive, masteryTarget, onTapKanji:setKanjiPopup, onTapWord:setWordPopup }),
-      mode==='read' && React.createElement(ReadMode, { onTapWord:setWordPopup }),
-      mode==='kanji' && React.createElement(KanjiMode, { items })
+        : React.createElement(QuizMode, { items:deck, progress, idx:Math.min(deckIdx, deck.length-1), onAdvance:advanceDeck, onAnswer:handleAnswer, onCurrentWord:(id)=>{currentWordRef.current=id;}, onTapKanji:setKanjiPopup, onTapWord:setWordPopup, onEditWord:setEditWordTarget, furigana, onToggleFurigana:toggleFurigana })),
+      mode==='words' && React.createElement(WordsMode, { items, progress, onRemove:handleRemove, onAdd:handleAdd, onEdit:handleEdit, onMerge:handleMerge, onResetWord:resetWord, onMarkMastered:markMastered, activeIds:activeIds||[], onAddToActive:addToActive, onRemoveFromActive:removeFromActive, masteryTarget, onTapKanji:setKanjiPopup, onTapWord:setWordPopup, onReshuffle:reshuffle }),
+      mode==='read' && React.createElement(ReadMode, { onTapWord:setWordPopup,
+        raw:readRaw, setRaw:setReadRaw, processed:readProcessed, setProcessed:setReadProcessed }),
+      mode==='kanji' && React.createElement(KanjiMode, { items, onEditWord:setEditWordTarget, onPopupKanji:setKanjiPopup })
     )
   );
 }
