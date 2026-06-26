@@ -158,7 +158,7 @@ var nextTick=require("process/browser.js").nextTick,apply=Function.prototype.app
 <script type="text/babel">
 const { useState, useEffect, useRef } = React;
 
-// ── In-app confirm dialog (replaces window.confirm so it works everywhere) ──
+// -- In-app confirm dialog (replaces window.confirm so it works everywhere) --
 let _confirmListener = null;
 function askConfirm(message, opts) {
   return new Promise(resolve => {
@@ -209,7 +209,7 @@ const DARK = {
   accent: "#6b4a8f", header: "#2a1d38",
 };
 
-// ── Color utilities for the custom theme ─────────────────────────────────
+// -- Color utilities for the custom theme ---------------------------------
 function hexToRgb(hex) {
   hex = (hex || '').replace('#', '');
   if (hex.length === 3) hex = hex.split('').map(c => c + c).join('');
@@ -253,7 +253,7 @@ function hslToHex(h, s, l) {
 // Derive a full, legible palette from a single accent color + a light/dark base.
 // The accent's hue sets the whole palette; its saturation and lightness now
 // also nudge the result (within safe bounds) so a pale pastel and a deep vivid
-// pick produce visibly different — but still legible — themes.
+// pick produce visibly different - but still legible - themes.
 function deriveTheme(accentHex, base) {
   const rgb = hexToRgb(accentHex) || hexToRgb('#6b4a8f');
   const { h, s, l } = rgbToHsl(rgb);
@@ -358,12 +358,12 @@ function applyTheme(name) {
 const PROGRESS_KEY = "kanji-progress-v1";
 const WORDS_KEY = "kanji-words-v1";
 
-// ── Config — fill these in after Supabase setup ──────────────────────────
+// -- Config - fill these in after Supabase setup --------------------------
 const SUPABASE_URL = "https://scicjgxzbiptnjwsbyzv.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_xTSFjCF8rMaFSf-Xig_0uQ_6Ku-4NZt";
 const SUPABASE_ENABLED = SUPABASE_URL !== "YOUR_SUPABASE_URL";
 
-// ── User ID — shown in settings so user can copy it to other devices ────
+// -- User ID - shown in settings so user can copy it to other devices ----
 function getUserId() {
   let id = localStorage.getItem("kanji-user-id");
   if (!id) { id = crypto.randomUUID(); localStorage.setItem("kanji-user-id", id); }
@@ -373,7 +373,7 @@ function setUserId(id) {
   localStorage.setItem("kanji-user-id", id.trim());
 }
 
-// ── Local storage helpers ─────────────────────────────────────────────────
+// -- Local storage helpers -------------------------------------------------
 function localGet(key) {
   try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : null; }
   catch { return null; }
@@ -392,7 +392,7 @@ function setLocalTs(key, ts) {
 // Track in-flight remote writes so we don't read a stale value mid-flight
 const pendingWrites = {};
 
-// ── Supabase helpers ──────────────────────────────────────────────────────
+// -- Supabase helpers ------------------------------------------------------
 // Table: kanji_progress (user_id text, key text, value text, PRIMARY KEY (user_id, key))
 // value stores an envelope: { v: <data>, ts: <ms> }
 async function supabaseGet(key) {
@@ -431,7 +431,7 @@ async function supabaseSet(key, val, ts) {
   } catch {}
 }
 
-// ── Unified storage — local wins if its timestamp is newer than remote ───
+// -- Unified storage - local wins if its timestamp is newer than remote ---
 async function storageGet(key) {
   // If a write for this key is still in flight, trust local immediately
   if (pendingWrites[key]) return localGet(key);
@@ -598,7 +598,7 @@ function parseTakoboto(raw) {
   } catch (e) { return null; }
 }
 
-// ── Furigana via Kuroshiro + kuromoji (lazy-loaded) ──────────────────────
+// -- Furigana via Kuroshiro + kuromoji (lazy-loaded) ----------------------
 // Scripts are loaded only when the first sentence is shown, not on startup.
 let kuroshiroInstance = null;
 let kuroshiroReady = false;
@@ -723,7 +723,7 @@ function readingSearchKey(s) {
   // if it contains kana, convert; romaji passes through
   return /[\u3040-\u30ff]/.test(s) ? kanaToRomaji(s) : s;
 }
-// The leading kanji "stem" of a word — the run of kanji before the okurigana.
+// The leading kanji "stem" of a word - the run of kanji before the okurigana.
 // 遊び→遊, 遊ぶ→遊, 食べる→食, 勉強する→勉強. Lets conjugated/inflected forms
 // of the same word match each other (遊び finds 遊ぶ).
 function kanjiStem(word) {
@@ -762,7 +762,7 @@ function readingSortKey(item) {
   // Otherwise use the kuroshiro-computed hiragana if we've cached it
   const cached = readingCache[item.word];
   if (cached && /[\u3040-\u30ff]/.test(cached)) return kanaSortKey(cached);
-  // Last resort: the word itself (kanji sorts by code point — imperfect but stable)
+  // Last resort: the word itself (kanji sorts by code point - imperfect but stable)
   return kanaSortKey(item.word || '');
 }
 function compareReading(a, b) {
@@ -772,7 +772,7 @@ function compareReading(a, b) {
   return 0;
 }
 
-// ── Local JMdict dictionary (jmdict-simplified format) ───────────────────
+// -- Local JMdict dictionary (jmdict-simplified format) -------------------
 // Loads jmdict.json once from the same origin (no CORS), builds an index,
 // and caches the built index in IndexedDB so future loads are instant.
 const wordInfoCache = {};
@@ -1038,7 +1038,7 @@ function StrokeOrder({ word }) {
   );
 }
 
-// ── Kanji helpers & dictionary (kanjiapi.dev) ────────────────────────────
+// -- Kanji helpers & dictionary (kanjiapi.dev) ----------------------------
 function isKanjiChar(ch) {
   const c = ch.codePointAt(0);
   return (c >= 0x4e00 && c <= 0x9faf) || (c >= 0x3400 && c <= 0x4dbf);
@@ -1273,7 +1273,7 @@ function WordPopup({ token, onClose, onAdd, existing }) {
         )
       ),
 
-      // More info (cross-refs, notes, alt forms) — collapsed by default
+      // More info (cross-refs, notes, alt forms) - collapsed by default
       info && (() => {
         const hasMore = (info.notes && info.notes.length) || (info.related && info.related.length)
           || (info.antonym && info.antonym.length) || (info.altForms && info.altForms.length);
@@ -1308,7 +1308,7 @@ function WordPopup({ token, onClose, onAdd, existing }) {
         );
       })(),
 
-      // Example sentences — collapsed by default (only if the file includes them)
+      // Example sentences - collapsed by default (only if the file includes them)
       info && info.examples && info.examples.length > 0 && React.createElement(Collapsible,
         { key: 'ex', title: 'Example sentences', count: info.examples.length },
         info.examples.map((ex, i) =>
@@ -1427,7 +1427,7 @@ function btn(bg, color, extra) {
 
 // Small square icon button; shows a diagonal strike when `active` (i.e. the
 // thing it toggles is currently shown → tap to hide).
-// Floating "back to top" button — a star, no symbol. Appears after scrolling
+// Floating "back to top" button - a star, no symbol. Appears after scrolling
 // down and scrolls the page back to the top. `scrollRef` lets it target a
 // specific scroll container (e.g. the Dict detail page); defaults to window.
 function BackToTop({ scrollRef }) {
@@ -1688,7 +1688,7 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
 
   const clearError = () => setError('');
 
-  // Action buttons row (mark mastered / reset / delete / edit) — view mode only
+  // Action buttons row (mark mastered / reset / delete / edit) - view mode only
   const actionRow = React.createElement('div', { style:{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:6, marginTop:16 } },
     React.createElement('button', {
       onClick: () => { if (!isMastered) onMarkMastered(); },
@@ -1716,7 +1716,7 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
     }, 'Delete')
   );
 
-  // Sentence list — `readOnly` hides the ✕ remove buttons and the add-sentence
+  // Sentence list - `readOnly` hides the ✕ remove buttons and the add-sentence
   // control (used in the quick-view panel; edit mode passes readOnly=false).
   const renderSentences = (readOnly) => React.createElement('div', null,
     localSentences.length > 0 && React.createElement('div', { style:{ background:C.paperDark, borderRadius:8, padding:'12px 14px', marginBottom: readOnly ? 0 : 10 } },
@@ -1825,7 +1825,7 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
   );
 }
 
-// ── Account screen — full page for sync ID management ────────────────────
+// -- Account screen - full page for sync ID management --------------------
 function AccountScreen({ onClose, onReset, onLogout, onExport, onDeleteAll, sessionSize, onSessionSize, masteryTarget, onMasteryTarget,
     theme, onSetTheme, customAccent, customBase, onSetCustomColors, firstRun }) {
   const [userId, setUserIdState] = React.useState(getUserId());
@@ -1879,7 +1879,7 @@ function AccountScreen({ onClose, onReset, onLogout, onExport, onDeleteAll, sess
     ),
     theme === 'custom' && React.createElement('div', { style: { background: C.card, border: `1px solid ${C.line}`, borderRadius: 10, padding: 14 } },
       React.createElement('div', { style: { display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom: 10 } },
-        React.createElement('div', { style: { fontSize: 12, color: C.muted } }, 'Pick an accent — the palette is derived from it.'),
+        React.createElement('div', { style: { fontSize: 12, color: C.muted } }, 'Liven up your study with a personal palette.'),
         React.createElement('button', { onClick: () => setEditPalette(e => !e),
           style: { background:'none', border:'none', color: editPalette ? C.accent : C.muted, cursor:'pointer', fontSize:12, fontWeight:600, padding:'2px 4px' } },
           editPalette ? 'Done' : 'Edit')
@@ -1937,7 +1937,7 @@ function AccountScreen({ onClose, onReset, onLogout, onExport, onDeleteAll, sess
   const syncBlock = React.createElement(React.Fragment, null,
     React.createElement('div', { style: { fontSize: 14, color: C.ink, fontWeight: 600, marginBottom: 8 } }, 'Your Sync ID'),
     React.createElement('div', { style: { color: C.muted, fontSize: 13, marginBottom: 12, lineHeight: 1.6 } },
-      'This ID is your account. Copy it and paste it on your other devices to share the same words and progress.'),
+      'This ID is your account. Keep it snug and safe. '),
     React.createElement('div', {
       style: { fontFamily: 'monospace', fontSize: 13, background: C.paperDark,
         padding: '12px 14px', borderRadius: 8, wordBreak: 'break-all', color: C.ink, marginBottom: 8 }
@@ -1977,7 +1977,7 @@ function AccountScreen({ onClose, onReset, onLogout, onExport, onDeleteAll, sess
 
   return React.createElement('div', { style: { maxWidth: 460, margin: '0 auto', padding: 24 } },
     React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 } },
-      React.createElement('div', { style: { fontSize: 22, fontWeight: 700, color: C.ink } }, 'Account & Sync'),
+      React.createElement('div', { style: { fontSize: 22, fontWeight: 700, color: C.ink } }, 'Account'),
       onClose && React.createElement('button', { onClick: onClose,
         style: { background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: C.muted } }, '✕')
     ),
@@ -2016,7 +2016,7 @@ function AccountScreen({ onClose, onReset, onLogout, onExport, onDeleteAll, sess
     React.createElement('div', { style: { color: C.muted, fontSize: 13, marginBottom: 12, lineHeight: 1.6 } },
       React.createElement('span', null, 'How many times in a row you need to answer a word correctly before it counts as mastered.'),
       React.createElement('span', { style: { display: 'block', marginTop: 8 } },
-        'Changing this only affects words mastered through practice — raise it and those words return for more review. Words you tap “Mastered” on by hand stay mastered no matter what you set here (reset a word to undo that).')
+        'Changing this only affects words mastered through practice. If you raise it those words return for more review. Words you mark “Mastered” by hand stay mastered no matter what you set here. If you wish to bring them back to practice sessions, use the reset button.')
     ),
     React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 10 } },
       [3, 5, 7, 10].map(n =>
@@ -2057,7 +2057,7 @@ function AccountScreen({ onClose, onReset, onLogout, onExport, onDeleteAll, sess
       React.createElement('div', { style: { height: 1, background: C.line, marginBottom: 24 } }),
       React.createElement('div', { style: { fontSize: 14, color: C.ink, fontWeight: 600, marginBottom: 8 } }, 'Log out'),
       React.createElement('div', { style: { color: C.muted, fontSize: 13, marginBottom: 12, lineHeight: 1.6 } },
-        'Signs out on this device and returns to the start screen. Your words and progress stay safe in the cloud — log back in anytime with your Sync ID.'),
+        'Signs out on this device and returns to the start screen. Your words and progress stay safe in the cloud. '),
       React.createElement('button', { onClick: onLogout,
         style: { ...btn(C.card, C.ink), border: `1px solid ${C.line}`, flex: 'unset', width: '100%' }
       }, 'Log out')
@@ -2067,7 +2067,7 @@ function AccountScreen({ onClose, onReset, onLogout, onExport, onDeleteAll, sess
       React.createElement('div', { style: { height: 1, background: C.line, marginBottom: 24 } }),
       React.createElement('div', { style: { fontSize: 14, color: C.ink, fontWeight: 600, marginBottom: 8 } }, 'Danger zone'),
       React.createElement('div', { style: { color: C.muted, fontSize: 13, marginBottom: 12, lineHeight: 1.6 } },
-        'Reset progress sets every word back to 0 (words are kept). Delete all words wipes everything and starts you over.'),
+        'Reset progress sets every word back to 0. Delete all words wipes everything and gives you a clean slate to start over.'),
       React.createElement('button', { onClick: onReset,
         style: { ...btn(C.card, C.wrong), border: `1px solid ${C.wrong}`, flex: 'unset', width: '100%', marginBottom: 10 }
       }, 'Reset all progress'),
@@ -2078,7 +2078,7 @@ function AccountScreen({ onClose, onReset, onLogout, onExport, onDeleteAll, sess
   );
 }
 
-// ── Add-list form — merge a new CSV/JSON into existing words ──────────────
+// -- Add-list form - merge a new CSV/JSON into existing words --------------
 function AddListForm({ onMerge, onClose }) {
   const [error, setError] = React.useState('');
   const [loading, setLoading] = React.useState(false);
@@ -2144,7 +2144,7 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
   const [filter, setFilter] = useState('all'); // all | studied | mastered | new
   // Snapshot of which words count as "active" for SORTING purposes. Re-frozen
   // when the view context changes (incl. switching sort mode), but NOT when a
-  // single word is toggled — so toggling doesn't bounce the scroll.
+  // single word is toggled - so toggling doesn't bounce the scroll.
   const sortActiveRef = React.useRef(null);
   const sortCtxRef = React.useRef('');
   const sortCtx = `${filter}|${search}|${sortMode}`;
@@ -2179,7 +2179,7 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
     if (!q) return true;
     // sentence-paste mode: match words that share any kanji with the query
     if (qKanjiSet) return [...it.word].some(ch => qKanjiSet.has(ch));
-    // normal search — matches word, reading (kana OR romaji), or meaning
+    // normal search - matches word, reading (kana OR romaji), or meaning
     if (it.word.toLowerCase().includes(q)) return true;
     if ((it.reading||'').toLowerCase().includes(q)) return true;
     // meaning match: each meaningful query word must START a word in the meaning
@@ -2330,14 +2330,14 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
                       React.createElement('div', { style:{ color:C.muted, fontSize:11 } }, `✓${p.correct} ✗${p.wrong}`)
                     )
             ),
-            // Active-deck toggle — hidden for mastered words (reset to re-add)
+            // Active-deck toggle - hidden for mastered words (reset to re-add)
             isMastered
-              ? React.createElement('div', { title:'Mastered — reset to add back to active set',
+              ? React.createElement('div', { title:'Mastered (reset to add back to active set)',
                   style:{ width:26, height:26, flexShrink:0, display:'flex', alignItems:'center',
                     justifyContent:'center', color:C.correct, fontSize:14 } }, '✓')
               : React.createElement('button', {
                   onClick:()=> inActive ? onRemoveFromActive(item.id) : onAddToActive(item.id),
-                  title: inActive ? 'In active set — tap to remove' : 'Add to active set',
+                  title: inActive ? 'In active set (tap to remove)' : 'Add to active set',
                   style:{ background: inActive ? C.gold : 'none', border:`1px solid ${inActive ? C.gold : C.line}`,
                     color: inActive ? 'white' : C.muted, cursor:'pointer', fontSize:14,
                     width:26, height:26, borderRadius:6, flexShrink:0, lineHeight:1,
@@ -2405,7 +2405,7 @@ function ImportScreen({ onImport, onAccount, onStartFresh }) {
       </button>
       <button onClick={onStartFresh}
         style={{ ...btn(C.card,C.muted), border:`1px solid ${C.line}`, flex:'unset', width:'100%', marginTop:10 }}>
-        Start fresh — add words manually
+        Start fresh: add words manually
       </button>
     </div>
   );
@@ -2424,7 +2424,7 @@ function shuffle(arr) {
   return a;
 }
 
-// ── Read tab — paste text, get furigana + tappable words ────────────────
+// -- Read tab - paste text, get furigana + tappable words ----------------
 // State (raw/processed) lives in App so it persists across tab switches.
 function ReadMode({ onTapWord, raw, setRaw, processed, setProcessed }) {
   const process = () => {
@@ -2478,7 +2478,7 @@ function ReadMode({ onTapWord, raw, setRaw, processed, setProcessed }) {
   );
 }
 
-// ── Kanji dictionary tab ─────────────────────────────────────────────────
+// -- Kanji dictionary tab -------------------------------------------------
 function KanjiMode({ items, onTapWord, onEditWord, onPopupKanji }) {
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState(null);
@@ -2735,7 +2735,7 @@ function App() {
             enriched++;
           }
         } else {
-          // Brand new word — normalize to the sentences[] shape
+          // Brand new word - normalize to the sentences[] shape
           const sents = getSentences(incoming);
           const w = { ...incoming, sentences: sents,
             sentence: sents[0] ? sents[0].ja : null,
@@ -2864,7 +2864,7 @@ function App() {
     persistDeck(nextDeck);
   };
   const logout = () => {
-    askConfirm('Log out on this device? Make sure you have saved your Sync ID — it’s the only way to log back in. Your data stays safe in the cloud.', { confirmLabel: 'Log out' }).then(ok => {
+    askConfirm('Log out on this device? Make sure you have saved your Sync ID. It’s the only way to log back in. Your data stays safe in the cloud.', { confirmLabel: 'Log out' }).then(ok => {
       if (!ok) return;
       try {
         // Clear the local session + cached data (cloud copy under the Sync ID is untouched).
@@ -2876,7 +2876,7 @@ function App() {
       location.reload();
     });
   };
-  // Wipe all words, sentences, and progress — back to a clean slate (same account).
+  // Wipe all words, sentences, and progress - back to a clean slate (same account).
   const deleteAll = () => {
     askConfirm('Delete ALL your words, sentences, and progress? This cannot be undone (export a backup first if you want to keep them).', { confirmLabel: 'Delete everything', danger: true }).then(ok => {
       if (!ok) return;
@@ -2958,7 +2958,7 @@ function App() {
         boxShadow:'0 8px 30px rgba(0,0,0,0.3)' }},
         React.createElement('div', { style:{ fontSize:20, fontWeight:700, color:C.ink, marginBottom:10 } }, 'Save your Sync ID'),
         React.createElement('div', { style:{ fontSize:13, color:C.muted, lineHeight:1.6, marginBottom:14 } },
-          'This is your account. It’s the only way to recover your words and progress, or load them on another device. Keep it somewhere safe — if you lose it, your data can’t be retrieved.'),
+          'This is your account. It’s the only way to recover your words and progress, or load them on another device. Keep it somewhere safe. If you lose it, your data can’t be retrieved.'),
         React.createElement('div', { style:{ fontFamily:'monospace', fontSize:13, background:C.paperDark,
           padding:'12px 14px', borderRadius:8, wordBreak:'break-all', color:C.ink, marginBottom:12 } }, welcomeId),
         React.createElement('div', { style:{ display:'flex', gap:10 } },
