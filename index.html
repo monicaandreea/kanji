@@ -488,6 +488,22 @@ function wordMastered(p, target) {
   return (p.streak || 0) >= target;
 }
 
+// Split a comma-separated meanings string, but ignore commas inside parentheses
+// so "cup (drinking vessel, etc.), measure" stays as two meanings, not four.
+function splitMeanings(str) {
+  if (!str) return [];
+  const out = [];
+  let depth = 0, cur = '';
+  for (const ch of str) {
+    if (ch === '(' || ch === '[' || ch === '（') depth++;
+    else if (ch === ')' || ch === ']' || ch === '）') depth = Math.max(0, depth - 1);
+    if (ch === ',' && depth === 0) { const t = cur.trim(); if (t) out.push(t); cur = ''; }
+    else cur += ch;
+  }
+  const t = cur.trim(); if (t) out.push(t);
+  return out;
+}
+
 function getSentences(item) {
   if (!item) return [];
   const out = [];
@@ -584,7 +600,7 @@ function parseTakoboto(raw) {
       parts.forEach(p => {
         p = p.replace(/^\s*\d+\.\s*/, '').trim();
         if (!p) return;
-        p.split(',').forEach(s => { s = s.trim(); if (s && !hasCjkKorean(s)) out.push(s); });
+        splitMeanings(p).forEach(s => { if (s && !hasCjkKorean(s)) out.push(s); });
       });
       const seen = new Set(); const res = [];
       out.forEach(m => { if (!seen.has(m.toLowerCase())) { seen.add(m.toLowerCase()); res.push(m); } });
@@ -1553,6 +1569,13 @@ function StudyMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTap
     setHint(false);
     onAdvance();
   };
+  // Advance without counting the card as right or wrong.
+  const skip = () => {
+    setClearTrigger(t => t + 1);
+    setPhase('q');
+    setHint(false);
+    onAdvance();
+  };
 
   const isWrite = type === 'write_meaning' || type === 'write_reading';
   const revealed = phase === 'reveal';
@@ -1605,9 +1628,12 @@ function StudyMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTap
   );
 
   const gradeBar = revealed ? (
-    <div style={{ display:'flex', gap:10, width:'100%' }}>
-      <button onClick={() => grade(false)} style={btn(C.wrong,'white')}>✗ Wrong</button>
-      <button onClick={() => grade(true)} style={btn(C.correct,'white')}>✓ Correct</button>
+    <div style={{ width:'100%' }}>
+      <div style={{ display:'flex', gap:10, width:'100%' }}>
+        <button onClick={() => grade(false)} style={btn(C.wrong,'white')}>✗ Wrong</button>
+        <button onClick={() => grade(true)} style={btn(C.correct,'white')}>✓ Correct</button>
+      </div>
+      <div onClick={skip} style={{ textAlign:'center', marginTop:12, fontSize:13, color:C.muted, cursor:'pointer' }}>Skip (don't count)</div>
     </div>
   ) : (
     <div style={{ display:'flex', gap:10, width:'100%' }}>
@@ -1851,7 +1877,7 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
       .map(s => ({ ja: s.ja.trim(), en: (s.en||'').trim() || null }))
       .filter(s => { if (seen.has(s.ja)) return false; seen.add(s.ja); return true; });
     onAdd({ id: isEdit ? editItem.id : `manual-${word.trim()}-${Date.now()}`, word:word.trim(), reading:reading.trim(),
-      meanings:meanings.split(',').map(m=>m.trim()).filter(Boolean),
+      meanings:splitMeanings(meanings),
       sentences,
       sentence: sentences[0] ? sentences[0].ja : null,
       sentenceEn: sentences[0] ? sentences[0].en : null });
@@ -2129,8 +2155,11 @@ function AccountScreen({ onClose, onReset, onLogout, onExport, onDeleteAll, sess
     React.createElement('input', {
       value: input, onChange: e => setInput(e.target.value),
       placeholder: 'Paste a Sync ID…',
-      type: 'text', name: 'sync-id', autoComplete: 'off', autoCorrect: 'off',
+      type: 'text', name: 'sync-id-field', autoComplete: 'off', autoCorrect: 'off',
       autoCapitalize: 'off', spellCheck: false, inputMode: 'text',
+      readOnly: true,
+      onFocus: e => { e.target.removeAttribute('readonly'); },
+      'data-form-type': 'other', 'data-lpignore': 'true', 'data-1p-ignore': 'true',
       style: { width: '100%', padding: '12px 14px', borderRadius: 8, border: `1px solid ${C.line}`,
         fontSize: 13, fontFamily: 'monospace', outline: 'none', boxSizing: 'border-box', marginBottom: 10, color: C.ink, background: C.card }
     }),
