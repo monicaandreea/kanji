@@ -903,7 +903,7 @@ function initDictionary() {
     let db = null;
     try { db = await idbOpen(); } catch {}
     if (db) {
-      const cached = await idbGet(db, 'jmdict-index-v2');
+      const cached = await idbGet(db, 'jmdict-index-v3');
       if (cached && cached.map) {
         jmdictIndex = cached.map;
         jmdictTagMap = cached.tags || {};
@@ -918,7 +918,7 @@ function initDictionary() {
       const built = buildIndex(json);
       jmdictIndex = built.map;
       jmdictTagMap = built.tags;
-      if (db) { idbSet(db, 'jmdict-index-v2', built); } // cache for next time
+      if (db) { idbSet(db, 'jmdict-index-v3', built); } // cache for next time
       return true;
     } catch (e) {
       jmdictIndex = {}; // mark as "loaded but empty" so we don't retry forever
