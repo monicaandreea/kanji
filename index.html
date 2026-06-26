@@ -1480,7 +1480,7 @@ function BackToTop({ scrollRef }) {
     else el.scrollTo({ top: 0, behavior: 'smooth' });
   };
   return React.createElement('button', { onClick: toTop, title: 'Back to top', 'aria-label': 'Back to top',
-    style: { position:'fixed', right:18, bottom:18, zIndex:200,
+    style: { position:'fixed', right:18, bottom:18, zIndex:50,
       border:'none', background:'none', color:C.gold, cursor:'pointer',
       fontSize:38, lineHeight:1, padding:6,
       filter:'drop-shadow(0 1px 3px rgba(0,0,0,0.35))' } }, '★');
@@ -1779,7 +1779,8 @@ function FormField({ label, value, setter, placeholder, hint, clearError }) {
   return React.createElement('div', { style:{ marginBottom:14 } },
     React.createElement('div', { style:{ fontSize:12, fontWeight:600, color:C.ink, marginBottom:4 } }, label),
     React.createElement('input', { value, onChange:e=>{ setter(e.target.value); clearError && clearError(); },
-      placeholder, style:{ width:'100%', padding:'10px 12px', borderRadius:8,
+      placeholder, autoComplete:'off', autoCorrect:'off', autoCapitalize:'off', spellCheck:false,
+      style:{ width:'100%', padding:'10px 12px', borderRadius:8,
         border:`1px solid ${C.line}`, fontSize:16, outline:'none', background:C.card, color:C.ink, boxSizing:'border-box' } }),
     hint && React.createElement('div', { style:{ fontSize:11, color:C.muted, marginTop:3 } }, hint)
   );
@@ -1969,9 +1970,11 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
   );
 
   return React.createElement('div', {
+    onClick: onClose,
     style:{ position:'fixed', inset:0, background:'rgba(0,0,0,0.4)', zIndex:100,
       display:'flex', alignItems:'flex-end', justifyContent:'center' }},
     React.createElement('div', {
+      onClick: (e) => e.stopPropagation(),
       style:{ background:C.paper, borderRadius:'16px 16px 0 0', padding:24,
         width:'100%', maxWidth:480, maxHeight:'85vh', overflowY:'auto' }},
       React.createElement('div', { style:{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:16 } },
@@ -2126,6 +2129,8 @@ function AccountScreen({ onClose, onReset, onLogout, onExport, onDeleteAll, sess
     React.createElement('input', {
       value: input, onChange: e => setInput(e.target.value),
       placeholder: 'Paste a Sync ID…',
+      type: 'text', name: 'sync-id', autoComplete: 'off', autoCorrect: 'off',
+      autoCapitalize: 'off', spellCheck: false, inputMode: 'text',
       style: { width: '100%', padding: '12px 14px', borderRadius: 8, border: `1px solid ${C.line}`,
         fontSize: 13, fontFamily: 'monospace', outline: 'none', boxSizing: 'border-box', marginBottom: 10, color: C.ink, background: C.card }
     }),
@@ -2309,9 +2314,11 @@ function AddListForm({ onMerge, onClose }) {
   };
 
   return React.createElement('div', {
+    onClick: onClose,
     style: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 100,
       display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }},
     React.createElement('div', {
+      onClick: (e) => e.stopPropagation(),
       style: { background: C.paper, borderRadius: '16px 16px 0 0', padding: 24,
         width: '100%', maxWidth: 480, maxHeight: '85vh', overflowY: 'auto' }},
       React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 } },
@@ -2833,6 +2840,21 @@ function App() {
     applyTheme('custom'); setTheme('custom');
   };
   useEffect(() => { applyTheme(theme); }, []);
+
+  // Pressing Enter in a single-line input dismisses the keyboard (blurs it).
+  // Textareas keep Enter for newlines.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key !== 'Enter') return;
+      const el = e.target;
+      if (el && el.tagName === 'INPUT' && el.type !== 'file') {
+        e.preventDefault();
+        el.blur();
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, []);
 
   useEffect(() => {
     (async () => {
