@@ -335,6 +335,12 @@ function applyTheme(name) {
   Object.keys(src).forEach(k => { C[k] = src[k]; });
   localStorage.setItem(THEME_KEY, name);
   document.body.style.background = C.paper;
+  // Update the mobile status-bar / address-bar tint to match the header.
+  try {
+    let meta = document.querySelector('meta[name="theme-color"]');
+    if (!meta) { meta = document.createElement('meta'); meta.name = 'theme-color'; document.head.appendChild(meta); }
+    meta.setAttribute('content', C.header);
+  } catch (e) {}
 }
 
 const PROGRESS_KEY = "kanji-progress-v1";
@@ -1353,11 +1359,6 @@ function DrawCanvas({ clearTrigger }) {
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.strokeStyle = C.line; ctx.lineWidth = 0.5; ctx.setLineDash([4, 4]);
-    ctx.beginPath();
-    ctx.moveTo(canvas.width/2, 0); ctx.lineTo(canvas.width/2, canvas.height);
-    ctx.moveTo(0, canvas.height/2); ctx.lineTo(canvas.width, canvas.height/2);
-    ctx.stroke(); ctx.setLineDash([]);
   }, [clearTrigger]);
 
   const startDraw = e => {
@@ -1405,19 +1406,20 @@ function btn(bg, color, extra) {
 
 // Small square icon button; shows a diagonal strike when `active` (i.e. the
 // thing it toggles is currently shown → tap to hide).
-function IconBtn({ symbol, onClick, active, title, disabled }) {
+function IconBtn({ symbol, onClick, active, title, disabled, toggle }) {
   return React.createElement('button', { onClick: disabled ? undefined : onClick, title, disabled,
     style: { position:'relative', width:38, height:38, borderRadius:8,
       border:`1px solid ${C.line}`, background:C.card, color: disabled ? C.line : C.ink,
       fontSize:18, cursor: disabled ? 'default' : 'pointer', display:'flex', alignItems:'center',
       justifyContent:'center', flexShrink:0, padding:0, overflow:'hidden', opacity: disabled ? 0.5 : 1 } },
     symbol,
-    active && !disabled && React.createElement('span', { style:{ position:'absolute', left:4, right:4, top:'50%',
+    // For toggle buttons, a diagonal strike means the thing is currently HIDDEN (off).
+    toggle && !active && !disabled && React.createElement('span', { style:{ position:'absolute', left:4, right:4, top:'50%',
       height:2, background:C.muted, transform:'rotate(-45deg)', transformOrigin:'center', pointerEvents:'none' } })
   );
 }
 
-function WriteMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTapWord, idx, onAdvance, onEditWord, furigana, onToggleFurigana, showStrokes, onToggleStrokes }) {
+function WriteMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTapWord, idx, onAdvance, onEditWord, furigana, onToggleFurigana, showStrokes, onToggleStrokes, showSentence, onToggleSentence }) {
   const [phase, setPhase] = useState('write');
   const [clearTrigger, setClearTrigger] = useState(0);
 
@@ -1437,11 +1439,13 @@ function WriteMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTap
     onAdvance();
   };
 
-  // Vertical icon strip: Edit, stroke-order toggle, furigana toggle, clear/redo
+  // Vertical icon strip: edit, stroke order, furigana, sentences, clear/redo.
+  // The three middle ones are show/hide toggles (struck-through when hidden).
   const iconStrip = React.createElement('div', { style:{ display:'flex', flexDirection:'column', gap:8, flexShrink:0 } },
     React.createElement(IconBtn, { symbol:'✎', title:'Edit word', onClick:()=>onEditWord && onEditWord(item) }),
-    React.createElement(IconBtn, { symbol:'画', title:'Stroke order', active:showStrokes, onClick:onToggleStrokes }),
-    React.createElement(IconBtn, { symbol:'あ', title:'Furigana', active:furigana, onClick:onToggleFurigana }),
+    React.createElement(IconBtn, { symbol:'画', title:'Stroke order', toggle:true, active:showStrokes, onClick:onToggleStrokes }),
+    React.createElement(IconBtn, { symbol:'あ', title:'Furigana', toggle:true, active:furigana, onClick:onToggleFurigana }),
+    React.createElement(IconBtn, { symbol:'文', title:'Example sentence', toggle:true, active:showSentence, onClick:onToggleSentence }),
     React.createElement(IconBtn, { symbol:'↺', title:'Clear & rewrite', onClick:clear })
   );
 
@@ -1464,7 +1468,7 @@ function WriteMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTap
             </div>
             {showStrokes && <StrokeOrder word={item.word} />}
           </div>
-          {getSentences(item).length > 0 && (
+          {showSentence && getSentences(item).length > 0 && (
             <div style={{ background:C.paperDark, borderRadius:8, padding:'12px 14px', width:'100%' }}>
               <SentenceList item={item} word={item.word} reading={item.reading} showEn={true} furigana={furigana} onTapKanji={onTapKanji} onTapWord={onTapWord} />
             </div>
@@ -1521,7 +1525,7 @@ function QuizMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTapW
         </div>
         <div style={{ position:'absolute', right:0, top:0, display:'flex', flexDirection:'column', gap:8 }}>
           <IconBtn symbol="✎" title="Edit word" onClick={()=>onEditWord && onEditWord(item)} />
-          <IconBtn symbol="あ" title="Furigana" active={furigana} onClick={onToggleFurigana} />
+          <IconBtn symbol="あ" title="Furigana" toggle={true} active={furigana} onClick={onToggleFurigana} />
           <IconBtn symbol="？" title="Hint (show example sentence)" disabled={hint || revealed || !hasSentence} onClick={()=>setHint(true)} />
         </div>
       </div>
@@ -2131,7 +2135,7 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
       </div>
       <div style={{ display:'flex', gap:10 }}>
         <button onClick={()=>setShowAdd(true)} style={{ ...btn(C.accent,'white') }}>+ Add word</button>
-        <button onClick={()=>setShowAddList(true)} style={{ ...btn(C.card,C.ink), border:`2px solid ${C.ink}` }}>+ Add list</button>
+        <button onClick={()=>setShowAddList(true)} style={{ ...btn(C.card,C.accent), border:`2px solid ${C.accent}` }}>+ Add list</button>
       </div>
 
       {/* Search bar */}
@@ -2481,6 +2485,8 @@ function App() {
   const toggleFurigana = () => setFuriganaState(f => { const next = !f; try { localStorage.setItem('kanji-furigana', next ? 'on' : 'off'); } catch {} return next; });
   const [showStrokes, setShowStrokesState] = useState(() => localStorage.getItem('kanji-strokes') !== 'off');
   const toggleStrokes = () => setShowStrokesState(s => { const next = !s; try { localStorage.setItem('kanji-strokes', next ? 'on' : 'off'); } catch {} return next; });
+  const [showSentence, setShowSentenceState] = useState(() => localStorage.getItem('kanji-write-sentence') !== 'off');
+  const toggleSentence = () => setShowSentenceState(s => { const next = !s; try { localStorage.setItem('kanji-write-sentence', next ? 'on' : 'off'); } catch {} return next; });
   const [editWordTarget, setEditWordTarget] = useState(null); // word being edited from practice tabs
   const setThemeMode = (next) => { applyTheme(next); setTheme(next); };
   const setCustomColors = (accent, base) => {
@@ -2778,7 +2784,7 @@ function App() {
     React.createElement('div', { style:{ maxWidth:420, margin:'0 auto', padding:20, minHeight:'calc(100vh - 60px)' } },
       mode==='write' && (deckEmpty
         ? React.createElement('div', { style:{ textAlign:'center', color:C.muted, padding:'40px 20px' } }, 'No active words. Add some in the Words tab.')
-        : React.createElement(WriteMode, { items:deck, progress, idx:Math.min(deckIdx, deck.length-1), onAdvance:advanceDeck, onAnswer:handleAnswer, onCurrentWord:(id)=>{currentWordRef.current=id;}, onTapKanji:setKanjiPopup, onTapWord:setWordPopup, onEditWord:setEditWordTarget, furigana, onToggleFurigana:toggleFurigana, showStrokes, onToggleStrokes:toggleStrokes })),
+        : React.createElement(WriteMode, { items:deck, progress, idx:Math.min(deckIdx, deck.length-1), onAdvance:advanceDeck, onAnswer:handleAnswer, onCurrentWord:(id)=>{currentWordRef.current=id;}, onTapKanji:setKanjiPopup, onTapWord:setWordPopup, onEditWord:setEditWordTarget, furigana, onToggleFurigana:toggleFurigana, showStrokes, onToggleStrokes:toggleStrokes, showSentence, onToggleSentence:toggleSentence })),
       mode==='quiz' && (deckEmpty
         ? React.createElement('div', { style:{ textAlign:'center', color:C.muted, padding:'40px 20px' } }, 'No active words. Add some in the Words tab.')
         : React.createElement(QuizMode, { items:deck, progress, idx:Math.min(deckIdx, deck.length-1), onAdvance:advanceDeck, onAnswer:handleAnswer, onCurrentWord:(id)=>{currentWordRef.current=id;}, onTapKanji:setKanjiPopup, onTapWord:setWordPopup, onEditWord:setEditWordTarget, furigana, onToggleFurigana:toggleFurigana })),
