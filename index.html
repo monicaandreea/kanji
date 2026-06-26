@@ -1817,12 +1817,13 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
 }
 
 // ── Account screen — full page for sync ID management ────────────────────
-function AccountScreen({ onClose, onReset, onClearWords, sessionSize, onSessionSize, masteryTarget, onMasteryTarget,
+function AccountScreen({ onClose, onReset, onLogout, onExport, onDeleteAll, sessionSize, onSessionSize, masteryTarget, onMasteryTarget,
     theme, onSetTheme, customAccent, customBase, onSetCustomColors, firstRun }) {
   const [userId, setUserIdState] = React.useState(getUserId());
   const [input, setInput] = React.useState('');
   const [copied, setCopied] = React.useState(false);
   const [sizeInput, setSizeInput] = React.useState(String(sessionSize || 10));
+  const [masteryInput, setMasteryInput] = React.useState(String(masteryTarget || 5));
   const [accentDraft, setAccentDraft] = React.useState(customAccent || '#6b4a8f');
   const [palette, setPalette] = React.useState(loadPalette);
   const [editPalette, setEditPalette] = React.useState(false);
@@ -2005,10 +2006,10 @@ function AccountScreen({ onClose, onReset, onClearWords, sessionSize, onSessionS
     React.createElement('div', { style: { fontSize: 14, color: C.ink, fontWeight: 600, marginBottom: 8 } }, 'Correct answers to master'),
     React.createElement('div', { style: { color: C.muted, fontSize: 13, marginBottom: 12, lineHeight: 1.6 } },
       'How many times in a row you need to answer a word correctly before it counts as mastered.'),
-    React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 28 } },
+    React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 10 } },
       [3, 5, 7, 10].map(n =>
         React.createElement('button', { key: n,
-          onClick: () => onMasteryTarget(n),
+          onClick: () => { setMasteryInput(String(n)); onMasteryTarget(n); },
           style: { flex: 1, padding: '10px', borderRadius: 8,
             border: `2px solid ${masteryTarget === n ? C.accent : C.line}`,
             background: masteryTarget === n ? C.accent : C.card,
@@ -2016,20 +2017,51 @@ function AccountScreen({ onClose, onReset, onClearWords, sessionSize, onSessionS
             fontWeight: 600, cursor: 'pointer', fontSize: 14 } }, n)
       )
     ),
+    React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 28 } },
+      React.createElement('input', { type: 'number', value: masteryInput, min: 1, max: 50,
+        onChange: e => setMasteryInput(e.target.value),
+        placeholder: 'Custom…',
+        style: { flex: 1, padding: '10px 14px', borderRadius: 8, border: `1px solid ${C.line}`,
+          fontSize: 14, outline: 'none', boxSizing: 'border-box', color: C.ink, background: C.card } }),
+      React.createElement('button', {
+        onClick: () => { const n = parseInt(masteryInput, 10); if (Number.isFinite(n) && n > 0) onMasteryTarget(n); },
+        style: { ...btn(C.accent, 'white'), flex: 'unset', padding: '10px 18px' } }, 'Set')
+    ),
 
     React.createElement('div', { style: { height: 1, background: C.line, marginBottom: 24 } }),
     syncBlock,
-    loginBlock,
+
+    onExport && React.createElement(React.Fragment, null,
+      React.createElement('div', { style: { height: 1, background: C.line, marginBottom: 24 } }),
+      React.createElement('div', { style: { fontSize: 14, color: C.ink, fontWeight: 600, marginBottom: 8 } }, 'Back up your words'),
+      React.createElement('div', { style: { color: C.muted, fontSize: 13, marginBottom: 12, lineHeight: 1.6 } },
+        'Download all your words and sentences as a .json file. You can re-import it here or on another device anytime.'),
+      React.createElement('button', { onClick: onExport,
+        style: { ...btn(C.card, C.accent), border: `1px solid ${C.accent}`, flex: 'unset', width: '100%' }
+      }, 'Export words (.json)')
+    ),
+
+    onLogout && React.createElement(React.Fragment, null,
+      React.createElement('div', { style: { height: 1, background: C.line, marginBottom: 24 } }),
+      React.createElement('div', { style: { fontSize: 14, color: C.ink, fontWeight: 600, marginBottom: 8 } }, 'Log out'),
+      React.createElement('div', { style: { color: C.muted, fontSize: 13, marginBottom: 12, lineHeight: 1.6 } },
+        'Signs out on this device and returns to the start screen. Your words and progress stay safe in the cloud — log back in anytime with your Sync ID.'),
+      React.createElement('button', { onClick: onLogout,
+        style: { ...btn(C.card, C.ink), border: `1px solid ${C.line}`, flex: 'unset', width: '100%' }
+      }, 'Log out')
+    ),
 
     onReset && React.createElement(React.Fragment, null,
       React.createElement('div', { style: { height: 1, background: C.line, marginBottom: 24 } }),
-      React.createElement('div', { style: { fontSize: 14, color: C.ink, fontWeight: 600, marginBottom: 12 } }, 'Danger zone'),
+      React.createElement('div', { style: { fontSize: 14, color: C.ink, fontWeight: 600, marginBottom: 8 } }, 'Danger zone'),
+      React.createElement('div', { style: { color: C.muted, fontSize: 13, marginBottom: 12, lineHeight: 1.6 } },
+        'Reset progress sets every word back to 0 (words are kept). Delete all words wipes everything and starts you over.'),
       React.createElement('button', { onClick: onReset,
         style: { ...btn(C.card, C.wrong), border: `1px solid ${C.wrong}`, flex: 'unset', width: '100%', marginBottom: 10 }
       }, 'Reset all progress'),
-      React.createElement('button', { onClick: onClearWords,
-        style: { ...btn(C.card, C.muted), border: `1px solid ${C.line}`, flex: 'unset', width: '100%' }
-      }, 'Load a different word list')
+      onDeleteAll && React.createElement('button', { onClick: onDeleteAll,
+        style: { ...btn(C.wrong, 'white'), flex: 'unset', width: '100%' }
+      }, 'Delete all words')
     )
   );
 }
@@ -2312,7 +2344,7 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
   );
 }
 
-function ImportScreen({ onImport, onAccount }) {
+function ImportScreen({ onImport, onAccount, onStartFresh }) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const inputRef = useRef(null);
@@ -2358,6 +2390,10 @@ function ImportScreen({ onImport, onAccount }) {
       <button onClick={onAccount}
         style={{ ...btn(C.card,C.ink), border:`1px solid ${C.line}`, flex:'unset', width:'100%', marginTop:16 }}>
         Already have an account? Log in with Sync ID
+      </button>
+      <button onClick={onStartFresh}
+        style={{ ...btn(C.card,C.muted), border:`1px solid ${C.line}`, flex:'unset', width:'100%', marginTop:10 }}>
+        Start fresh — add words manually
       </button>
     </div>
   );
@@ -2572,6 +2608,7 @@ function App() {
   const [showSentence, setShowSentenceState] = useState(() => localStorage.getItem('kanji-write-sentence') !== 'off');
   const toggleSentence = () => setShowSentenceState(s => { const next = !s; try { localStorage.setItem('kanji-write-sentence', next ? 'on' : 'off'); } catch {} return next; });
   const [editWordTarget, setEditWordTarget] = useState(null); // word being edited from practice tabs
+  const [welcomeId, setWelcomeId] = useState(null); // first-run: show user their Sync ID once
   const setThemeMode = (next) => { applyTheme(next); setTheme(next); };
   const setCustomColors = (accent, base) => {
     if (accent != null) { localStorage.setItem(CUSTOM_ACCENT_KEY, accent); setCustomAccent(accent); }
@@ -2648,7 +2685,16 @@ function App() {
     persistDeck(deck);
   };
 
-  const handleImport = parsed => { setItems(parsed); storageSet(WORDS_KEY, parsed); setActiveIds(null); storageSet(DECK_KEY, null); };
+  const maybeWelcome = () => {
+    try {
+      if (!localStorage.getItem('kanji-seen-welcome')) {
+        localStorage.setItem('kanji-seen-welcome', '1');
+        setWelcomeId(getUserId());
+      }
+    } catch (e) {}
+  };
+  const handleImport = parsed => { setItems(parsed); storageSet(WORDS_KEY, parsed); setActiveIds(null); storageSet(DECK_KEY, null); maybeWelcome(); };
+  const startFresh = () => { setItems([]); storageSet(WORDS_KEY, []); setActiveIds([]); storageSet(DECK_KEY, []); maybeWelcome(); };
   const handleMerge = parsed => {
     let added = 0, enriched = 0;
     setItems(prev => {
@@ -2803,11 +2849,44 @@ function App() {
     setActiveIds(nextDeck);
     persistDeck(nextDeck);
   };
-  const clearWords = () => {
-    askConfirm("Load a new word list? This won't delete your progress.", { confirmLabel: 'Continue' }).then(ok => {
+  const logout = () => {
+    askConfirm('Log out on this device? Make sure you have saved your Sync ID — it’s the only way to log back in. Your data stays safe in the cloud.', { confirmLabel: 'Log out' }).then(ok => {
       if (!ok) return;
-      setItems(null); storageSet(WORDS_KEY, null); setActiveIds(null); storageSet(DECK_KEY, null);
+      try {
+        // Clear the local session + cached data (cloud copy under the Sync ID is untouched).
+        [ 'kanji-user-id', 'kanji-seen-welcome',
+          PROGRESS_KEY, WORDS_KEY, DECK_KEY ].forEach(k => {
+          localStorage.removeItem(k); localStorage.removeItem(k + ':ts');
+        });
+      } catch (e) {}
+      location.reload();
     });
+  };
+  // Wipe all words, sentences, and progress — back to a clean slate (same account).
+  const deleteAll = () => {
+    askConfirm('Delete ALL your words, sentences, and progress? This cannot be undone (export a backup first if you want to keep them).', { confirmLabel: 'Delete everything', danger: true }).then(ok => {
+      if (!ok) return;
+      setItems(null); storageSet(WORDS_KEY, null);
+      setProgress({}); storageSet(PROGRESS_KEY, {});
+      setActiveIds(null); storageSet(DECK_KEY, null);
+      setShowAccount(false);
+    });
+  };
+  // Export all words in the app's own flat-JSON format (re-importable here).
+  const exportWords = () => {
+    if (!items || !items.length) return;
+    const out = items.map(it => ({
+      word: it.word, reading: it.reading || '',
+      meanings: it.meanings || [],
+      sentences: getSentences(it),
+    }));
+    const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const stamp = new Date().toISOString().slice(0, 10);
+    a.href = url; a.download = `kanji-words-${stamp}.json`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   if (!ready) return React.createElement('div', {
@@ -2818,7 +2897,8 @@ function App() {
     style:{ minHeight:'100vh', background:C.paper, paddingTop:20 }},
     React.createElement(ConfirmHost),
     React.createElement(AccountScreen, { onClose:()=>setShowAccount(false),
-      onReset: items ? resetProgress : null, onClearWords: items ? clearWords : null,
+      onReset: items ? resetProgress : null, onLogout: items ? logout : null,
+      onExport: items ? exportWords : null, onDeleteAll: items ? deleteAll : null,
       sessionSize, onSessionSize:setSessionSize,
       masteryTarget, onMasteryTarget:setMasteryTarget,
       theme, onSetTheme:setThemeMode, customAccent, customBase, onSetCustomColors:setCustomColors,
@@ -2827,7 +2907,7 @@ function App() {
   if (!items) return React.createElement('div', {
     style:{ minHeight:'100vh', background:C.paper, display:'flex', alignItems:'center' }},
     React.createElement(ConfirmHost),
-    React.createElement(ImportScreen, { onImport:handleImport, onAccount:()=>setShowAccount(true) }));
+    React.createElement(ImportScreen, { onImport:handleImport, onAccount:()=>setShowAccount(true), onStartFresh:startFresh }));
 
   // Active deck: the words for this session, in shuffled display order.
   // The order is shuffled once when the app opens, and stays stable as words
@@ -2857,6 +2937,24 @@ function App() {
 
   return React.createElement('div', { style:{ minHeight:'100vh', background:C.paper } },
     React.createElement(ConfirmHost),
+    welcomeId && React.createElement('div', {
+      style:{ position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', zIndex:400,
+        display:'flex', alignItems:'center', justifyContent:'center', padding:24 }},
+      React.createElement('div', { style:{ background:C.paper, borderRadius:14, padding:24, width:'100%', maxWidth:380,
+        boxShadow:'0 8px 30px rgba(0,0,0,0.3)' }},
+        React.createElement('div', { style:{ fontSize:20, fontWeight:700, color:C.ink, marginBottom:10 } }, 'Save your Sync ID'),
+        React.createElement('div', { style:{ fontSize:13, color:C.muted, lineHeight:1.6, marginBottom:14 } },
+          'This is your account. It’s the only way to recover your words and progress, or load them on another device. Keep it somewhere safe — if you lose it, your data can’t be retrieved.'),
+        React.createElement('div', { style:{ fontFamily:'monospace', fontSize:13, background:C.paperDark,
+          padding:'12px 14px', borderRadius:8, wordBreak:'break-all', color:C.ink, marginBottom:12 } }, welcomeId),
+        React.createElement('div', { style:{ display:'flex', gap:10 } },
+          React.createElement('button', { onClick:()=>{ navigator.clipboard && navigator.clipboard.writeText(welcomeId).catch(()=>{}); },
+            style:{ ...btn(C.card, C.accent), border:`1px solid ${C.accent}`, flex:1 } }, 'Copy'),
+          React.createElement('button', { onClick:()=>setWelcomeId(null),
+            style:{ ...btn(C.accent, 'white'), flex:1 } }, 'I’ve saved it')
+        )
+      )
+    ),
     React.createElement('div', { style:{ background:C.header, color:bestText(C.header), padding:'12px 14px',
       display:'flex', alignItems:'center', justifyContent:'space-between', gap:8, flexWrap:'wrap' }},
       React.createElement('div', { style:{ fontSize:18, fontWeight:700, flexShrink:0 } }, '漢字'),
