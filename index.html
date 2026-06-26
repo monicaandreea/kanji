@@ -460,6 +460,15 @@ async function storageSet(key, val) {
 
 // Returns a word's example sentences as an array of {ja, en}, migrating from
 // the older single sentence/sentenceEn fields on the fly. De-duplicates by ja.
+// A word counts as mastered if it was explicitly marked (sticky flag) OR its
+// streak has reached the current target. The sticky flag means raising the
+// "answers to master" setting never un-masters something you already mastered.
+function wordMastered(p, target) {
+  if (!p) return false;
+  if (p.mastered) return true;
+  return (p.streak || 0) >= target;
+}
+
 function getSentences(item) {
   if (!item) return [];
   const out = [];
@@ -1625,7 +1634,7 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
   const [editEn, setEditEn] = useState('');
   const ep = (editItem && progress && progress[editItem.id]) || { correct:0, wrong:0, streak:0 };
   const hasProgress = (ep.correct||0)+(ep.wrong||0) > 0;
-  const isMastered = (ep.streak||0) >= (masteryTarget||5);
+  const isMastered = wordMastered(ep, masteryTarget||5);
 
   const saveSentences = (sentences) => {
     if (!isEdit) return; // new word: sentences are committed on submit
@@ -2005,7 +2014,10 @@ function AccountScreen({ onClose, onReset, onLogout, onExport, onDeleteAll, sess
 
     React.createElement('div', { style: { fontSize: 14, color: C.ink, fontWeight: 600, marginBottom: 8 } }, 'Correct answers to master'),
     React.createElement('div', { style: { color: C.muted, fontSize: 13, marginBottom: 12, lineHeight: 1.6 } },
-      'How many times in a row you need to answer a word correctly before it counts as mastered.'),
+      React.createElement('span', null, 'How many times in a row you need to answer a word correctly before it counts as mastered.'),
+      React.createElement('span', { style: { display: 'block', marginTop: 8 } },
+        'Changing this only affects words mastered through practice — raise it and those words return for more review. Words you tap “Mastered” on by hand stay mastered no matter what you set here (reset a word to undo that).')
+    ),
     React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 10 } },
       [3, 5, 7, 10].map(n =>
         React.createElement('button', { key: n,
@@ -2142,8 +2154,8 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
     sortActiveRef.current = new Set(activeIds || []);
   }
   const sortActiveSet = sortActiveRef.current;
-  const studied = items.filter(it=>{ const p=progress[it.id]||{}; return (p.correct||0)+(p.wrong||0)>0 && (p.streak||0)<masteryTarget; }).length;
-  const mastered = items.filter(it=>(progress[it.id]?.streak||0)>=masteryTarget).length;
+  const studied = items.filter(it=>{ const p=progress[it.id]||{}; return (p.correct||0)+(p.wrong||0)>0 && !wordMastered(p, masteryTarget); }).length;
+  const mastered = items.filter(it=>wordMastered(progress[it.id], masteryTarget)).length;
   const unseen = items.filter(it=>!(progress[it.id]?.correct||progress[it.id]?.wrong)).length;
 
   const q = search.trim().toLowerCase();
@@ -2159,7 +2171,7 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
     // category filter
     const p = progress[it.id] || {};
     const total = (p.correct||0)+(p.wrong||0);
-    const isMastered = (p.streak||0) >= masteryTarget;
+    const isMastered = wordMastered(p, masteryTarget);
     if (filter==='studied' && (total===0 || isMastered)) return false;
     if (filter==='mastered' && !isMastered) return false;
     if (filter==='new' && total>0) return false;
@@ -2288,7 +2300,7 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
           const p=progress[item.id]||{correct:0,wrong:0,streak:0};
           const total=p.correct+p.wrong;
           const streak=p.streak||0;
-          const isMastered=streak>=masteryTarget;
+          const isMastered=wordMastered(p, masteryTarget);
           const inActive=activeIds.includes(item.id);
           // Insert a "Partial matches" label at the exact→partial boundary
           // (or at the very top when there are no exact matches at all).
@@ -2638,7 +2650,7 @@ function App() {
   // drops mastered ones, and tops up to sessionSize from unmastered words.
   useEffect(() => {
     if (!items || !deckLoaded) return;
-    const isMastered = id => (progress[id]?.streak || 0) >= masteryTarget;
+    const isMastered = id => wordMastered(progress[id], masteryTarget);
     const validIds = new Set(items.map(it => it.id));
 
     setActiveIds(prev => {
@@ -2666,7 +2678,7 @@ function App() {
     localStorage.setItem(SESSION_KEY, String(v));
     // Rebuild deck fresh at the new size
     if (items) {
-      const isMastered = id => (progress[id]?.streak || 0) >= masteryTarget;
+      const isMastered = id => wordMastered(progress[id], masteryTarget);
       const unmastered = items.filter(it => !isMastered(it.id));
       const pool = unmastered.length > 0 ? unmastered : items;
       const deck = shuffle(pool).slice(0, v).map(it => it.id);
@@ -2677,7 +2689,7 @@ function App() {
 
   const reshuffle = () => {
     if (!items) return;
-    const isMastered = id => (progress[id]?.streak || 0) >= masteryTarget;
+    const isMastered = id => wordMastered(progress[id], masteryTarget);
     const unmastered = items.filter(it => !isMastered(it.id));
     const pool = unmastered.length > 0 ? unmastered : items;
     const deck = shuffle(pool).slice(0, sessionSize).map(it => it.id);
@@ -2744,20 +2756,22 @@ function App() {
     setProgress(prev => {
       const e = prev[id]||{correct:0,wrong:0,streak:0};
       const newStreak = correct ? (e.streak||0)+1 : 0;
+      const justMastered = correct && wordMastered({ ...e, streak: newStreak }, masteryTarget);
       const next = { ...prev, [id]:{
+        ...e,
         correct: e.correct+(correct?1:0),
         wrong: e.wrong+(correct?0:1),
         streak: newStreak,
       } };
       storageSet(PROGRESS_KEY, next);
 
-      // If this word just got mastered, swap in a fresh unmastered word
-      if (newStreak >= masteryTarget && items) {
+      // If this word just reached mastery, swap in a fresh unmastered word
+      if (justMastered && items) {
         setActiveIds(prevDeck => {
           if (!prevDeck) return prevDeck;
           const inDeck = new Set(prevDeck);
           const candidate = shuffle(items.filter(it =>
-            !inDeck.has(it.id) && (next[it.id]?.streak || 0) < masteryTarget
+            !inDeck.has(it.id) && !wordMastered(next[it.id], masteryTarget)
           ))[0];
           // Drop the mastered word; append the new one if there is one
           const updated = candidate
@@ -2786,7 +2800,7 @@ function App() {
   };
   const addToActive = id => {
     // Don't allow adding mastered words to the active set (reset them first)
-    if ((progress[id]?.streak||0) >= masteryTarget) return;
+    if (wordMastered(progress[id], masteryTarget)) return;
     setActiveIds(prev => {
       const cur = prev || [];
       if (cur.includes(id)) return cur;
@@ -2808,7 +2822,7 @@ function App() {
     setActiveIds(prev => {
       const cur = prev || [];
       const set = new Set(cur);
-      const add = ids.filter(id => !set.has(id) && (progress[id]?.streak||0) < masteryTarget);
+      const add = ids.filter(id => !set.has(id) && !wordMastered(progress[id], masteryTarget));
       if (!add.length) return cur;
       const next = [...cur, ...add];
       persistDeck(next);
@@ -2841,7 +2855,7 @@ function App() {
   };
   const markMastered = (id) => {
     const e = progress[id] || { correct:0, wrong:0, streak:0 };
-    const nextProgress = { ...progress, [id]: { ...e, streak: masteryTarget, correct: Math.max(e.correct||0, masteryTarget) } };
+    const nextProgress = { ...progress, [id]: { ...e, mastered: true, streak: Math.max(e.streak||0, masteryTarget), correct: Math.max(e.correct||0, masteryTarget) } };
     setProgress(nextProgress);
     storageSet(PROGRESS_KEY, nextProgress);
     // drop it from the active deck since it's now mastered
@@ -2932,7 +2946,7 @@ function App() {
   // so the position survives tab switches and is shared between Write & Quiz.
   const advanceDeck = () => { setDeckIdx(i => deck.length ? (i + 1) % deck.length : 0); };
 
-  const masteredCount = items.filter(it => (progress[it.id]?.streak||0) >= masteryTarget).length;
+  const masteredCount = items.filter(it => wordMastered(progress[it.id], masteryTarget)).length;
   const allMastered = masteredCount === items.length && items.length > 0;
 
   return React.createElement('div', { style:{ minHeight:'100vh', background:C.paper } },
