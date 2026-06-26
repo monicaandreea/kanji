@@ -1633,7 +1633,7 @@ function StudyMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTap
         <button onClick={() => grade(false)} style={btn(C.wrong,'white')}>✗ Wrong</button>
         <button onClick={() => grade(true)} style={btn(C.correct,'white')}>✓ Correct</button>
       </div>
-      <div onClick={skip} style={{ textAlign:'center', marginTop:12, fontSize:13, color:C.muted, cursor:'pointer' }}>Skip (don't count)</div>
+      <div onClick={skip} style={{ textAlign:'center', marginTop:12, fontSize:13, color:C.muted, cursor:'pointer' }}>Skip</div>
     </div>
   ) : (
     <div style={{ display:'flex', gap:10, width:'100%' }}>
@@ -2494,6 +2494,8 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
       <div style={{ position:'relative' }}>
         <input value={search} onChange={e=>setSearch(e.target.value)}
           placeholder="Search words, readings, meanings…"
+          type="search" name="word-search" autoComplete="off" autoCorrect="off"
+          autoCapitalize="off" spellCheck={false}
           style={{ width:'100%', padding:'11px 36px 11px 14px', borderRadius:8,
             border:`1px solid ${C.line}`, fontSize:14, outline:'none', boxSizing:'border-box', background:C.card, color:C.ink }} />
         {search && React.createElement('button', { onClick:()=>setSearch(''),
@@ -2787,6 +2789,8 @@ function KanjiMode({ items, onTapWord, onEditWord, onPopupKanji }) {
     React.createElement('div', { style:{ position:'relative' } },
       React.createElement('input', { value:search, onChange:e=>setSearch(e.target.value),
         placeholder:'Search a kanji…',
+        type:'search', name:'kanji-search', autoComplete:'off', autoCorrect:'off',
+        autoCapitalize:'off', spellCheck:false,
         style:{ width:'100%', padding:'11px 36px 11px 14px', borderRadius:8,
           border:`1px solid ${C.line}`, fontSize:14, outline:'none', boxSizing:'border-box', background:C.card, color:C.ink } }),
       search && React.createElement('button', { onClick:()=>setSearch(''),
