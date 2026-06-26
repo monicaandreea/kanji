@@ -317,6 +317,25 @@ const CUSTOM_ACCENT_KEY = "kanji-custom-accent";
 const CUSTOM_BASE_KEY = "kanji-custom-base"; // 'light' | 'dark'
 const PALETTE_KEY = "kanji-custom-palette";  // user's saved accent swatches
 const MODE_KEY = "kanji-mode";
+const STUDY_TYPES_KEY = "kanji-study-types"; // which practice types are enabled
+// The 5 study (practice) types. `id` is stored; `needsSentence` filters eligibility.
+const STUDY_TYPES = [
+  { id: 'write_meaning', name: 'Write (meaning)', desc: 'see English, write the kanji' },
+  { id: 'write_reading', name: 'Write (reading)', desc: 'see kana, write the kanji' },
+  { id: 'recognise',     name: 'Kanji recognition', desc: 'see kanji, recall meaning' },
+  { id: 'sentence',      name: 'Sentence translation', desc: 'read a sentence, recall meaning', needsSentence: true },
+  { id: 'missing',       name: 'Missing word', desc: 'fill the blank in a sentence', needsSentence: true },
+];
+const STUDY_TYPE_IDS = STUDY_TYPES.map(t => t.id);
+function loadStudyTypes() {
+  try {
+    const raw = localStorage.getItem(STUDY_TYPES_KEY);
+    if (!raw) return ['write_meaning'];
+    const arr = JSON.parse(raw).filter(id => STUDY_TYPE_IDS.includes(id));
+    return arr.length ? arr : ['write_meaning'];
+  } catch (e) { return ['write_meaning']; }
+}
+function saveStudyTypes(arr) { try { localStorage.setItem(STUDY_TYPES_KEY, JSON.stringify(arr)); } catch (e) {} }
 // Default custom palette (order D: warm → cool).
 const DEFAULT_PALETTE = ['#fa46a6', '#fa9d8e', '#fae846', '#a6c246', '#46fa9d', '#b8c6ff', '#b88efa', '#3f007a'];
 function loadPalette() {
@@ -1349,13 +1368,17 @@ function TappableSentence({ sentence, onTapWord, furigana = true }) {
       const tappable = hasJa && t.pos && !['助詞','助動詞','記号'].includes(t.pos);
       if (!tappable) return React.createElement('span', { key: i }, t.surface);
       const hira = kataToHira(t.reading);
-      const showFuri = furigana && hira && [...(t.surface||'')].some(isKanjiChar) && hira !== t.surface;
+      const hasFuri = hira && [...(t.surface||'')].some(isKanjiChar) && hira !== t.surface;
+      // Always render the ruby structure when a reading exists, but hide the rt
+      // text when furigana is toggled off. This reserves the vertical space so
+      // the sentence doesn't shift/reflow when toggling furigana on and off.
       return React.createElement('span', {
         key: i,
         onClick: () => onTapWord(t),
         style: { cursor: 'pointer', borderBottom: `1px dotted ${C.gold}`, paddingBottom: 1 }
-      }, showFuri
-        ? React.createElement('ruby', null, t.surface, React.createElement('rt', null, hira))
+      }, hasFuri
+        ? React.createElement('ruby', null, t.surface,
+            React.createElement('rt', { style: furigana ? undefined : { visibility: 'hidden' } }, hira))
         : t.surface
       );
     })
@@ -1466,152 +1489,280 @@ function IconBtn({ symbol, onClick, active, title, disabled, toggle }) {
   );
 }
 
-function WriteMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTapWord, idx, onAdvance, onEditWord, furigana, onToggleFurigana, showStrokes, onToggleStrokes, showSentence, onToggleSentence }) {
-  const [phase, setPhase] = useState('write');
+
+// ── Unified practice tab. Per card, picks a random ENABLED + ELIGIBLE study
+// type and renders the matching layout. studyTypes is the user's chosen list. ─
+function StudyMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTapWord, idx, onAdvance,
+    onEditWord, furigana, onToggleFurigana, showStrokes, onToggleStrokes, showSentence, onToggleSentence, studyTypes }) {
+  const [phase, setPhase] = useState('q');     // 'q' (question) | 'reveal'
   const [clearTrigger, setClearTrigger] = useState(0);
+  const [hint, setHint] = useState(false);     // recognise mode: peek at sentence
 
   const safeIdx = Math.min(idx, items.length - 1);
   const item = items[safeIdx];
   const p = progress[item.id] || { correct: 0, wrong: 0 };
+  const sentences = getSentences(item);
+  const hasSentence = sentences.length > 0;
 
-  React.useEffect(() => { onCurrentWord && onCurrentWord(item.id); }, [item.id]);
-  React.useEffect(() => { setPhase('write'); }, [item.id]);
+  // Which of the enabled types can this word actually use right now?
+  const eligibleTypes = (() => {
+    const enabled = (studyTypes && studyTypes.length ? studyTypes : ['write_meaning']);
+    let list = STUDY_TYPES.filter(t => enabled.includes(t.id) && (!t.needsSentence || hasSentence));
+    // If a sentence-only set was chosen but this word has no sentence, fall back
+    // to recognition so the user is never stuck on a blank card.
+    if (!list.length) list = [STUDY_TYPES.find(t => t.id === 'recognise')];
+    return list;
+  })();
 
-  // Show up to 2 meanings as the prompt, chosen randomly each time this word
-  // comes up (re-picked whenever the word changes) for variety.
+  // Pick a type + a sentence, re-rolled whenever the word changes.
+  const pick = React.useMemo(() => {
+    const t = eligibleTypes[Math.floor(Math.random() * eligibleTypes.length)];
+    const s = hasSentence ? sentences[Math.floor(Math.random() * sentences.length)] : null;
+    return { type: t.id, sentence: s };
+  }, [item.id, studyTypes && studyTypes.join(',')]);
+  const type = pick.type;
+  const sentence = pick.sentence;
+
+  // Two random meanings for the write-from-meaning prompt.
   const promptMeanings = React.useMemo(() => {
     const ms = item.meanings || [];
     if (ms.length <= 2) return ms;
     const pool = [...ms];
     for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
     return pool.slice(0, 2);
-  }, [item.id]);
+  }, [item.id, type]);
+
+  React.useEffect(() => { onCurrentWord && onCurrentWord(item.id); }, [item.id]);
+  React.useEffect(() => { setPhase('q'); setClearTrigger(t => t + 1); setHint(false); }, [item.id]);
 
   const reveal = () => setPhase('reveal');
-  const clear = () => setClearTrigger(t => t + 1);
   const grade = (correct) => {
     onAnswer(item.id, correct);
     setClearTrigger(t => t + 1);
-    setPhase('write');
-    onAdvance();
-  };
-
-  // Vertical icon strip: edit, stroke order, furigana, sentences, clear/redo.
-  // The three middle ones are show/hide toggles (struck-through when hidden).
-  const iconStrip = React.createElement('div', { style:{ display:'flex', flexDirection:'column', gap:8, flexShrink:0 } },
-    React.createElement(IconBtn, { symbol:'✎', title:'Edit word', onClick:()=>onEditWord && onEditWord(item) }),
-    React.createElement(IconBtn, { symbol:'画', title:'Stroke order', toggle:true, active:showStrokes, onClick:onToggleStrokes }),
-    React.createElement(IconBtn, { symbol:'あ', title:'Furigana', toggle:true, active:furigana, onClick:onToggleFurigana }),
-    React.createElement(IconBtn, { symbol:'文', title:'Example sentence', toggle:true, active:showSentence, onClick:onToggleSentence }),
-    React.createElement(IconBtn, { symbol:'↺', title:'Clear & rewrite', onClick:clear })
-  );
-
-  return (
-    <div style={{ display:'flex', flexDirection:'column', gap:16, alignItems:'center' }}>
-      <div style={{ textAlign:'center', width:'100%' }}>
-        <div style={{ fontSize:12, color:C.muted, textTransform:'uppercase', letterSpacing:2, marginBottom:6 }}>Write this word</div>
-        <div style={{ fontSize:30, fontWeight:700, color:C.ink }}>{promptMeanings.join(' · ')}</div>
-        <div style={{ fontSize:11, color:C.muted, marginTop:4 }}>✓ {p.correct} · ✗ {p.wrong}</div>
-      </div>
-      <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:10, width:'100%' }}>
-        <DrawCanvas clearTrigger={clearTrigger} />
-        {iconStrip}
-      </div>
-      {phase === 'reveal' && (
-        <div style={{ width:'100%' }}>
-          <div style={{ textAlign:'center', marginBottom:8 }}>
-            <div style={{ fontSize:18, color:C.ink, fontWeight:600, marginBottom:6 }}>
-              <TappableKanji text={item.word} onTapKanji={onTapKanji} /> · <KanaReading word={item.word} fallback={item.reading} />
-            </div>
-            {showStrokes && <StrokeOrder word={item.word} />}
-          </div>
-          {showSentence && getSentences(item).length > 0 && (
-            <div style={{ background:C.paperDark, borderRadius:8, padding:'12px 14px', width:'100%' }}>
-              <SentenceList item={item} word={item.word} reading={item.reading} showEn={true} furigana={furigana} onTapKanji={onTapKanji} onTapWord={onTapWord} />
-            </div>
-          )}
-        </div>
-      )}
-      {phase === 'write' ? (
-        <div style={{ display:'flex', gap:10, width:'100%' }}>
-          <button onClick={reveal} style={{ ...btn(C.accent,'white'), width:'100%' }}>Reveal</button>
-        </div>
-      ) : (
-        <div style={{ display:'flex', gap:10, width:'100%' }}>
-          <button onClick={() => grade(false)} style={btn(C.wrong,'white')}>✗ Wrong</button>
-          <button onClick={() => grade(true)} style={btn(C.correct,'white')}>✓ Correct</button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function QuizMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTapWord, idx, onAdvance, onEditWord, furigana, onToggleFurigana }) {
-  const [revealed, setRevealed] = useState(false);
-  const [hint, setHint] = useState(false);
-
-  const safeIdx = Math.min(idx, items.length - 1);
-  const item = items[safeIdx];
-  const p = progress[item.id] || { correct: 0, wrong: 0 };
-
-  React.useEffect(() => { onCurrentWord && onCurrentWord(item.id); }, [item.id]);
-  // Reset reveal/hint whenever we move to a new card
-  React.useEffect(() => { setRevealed(false); setHint(false); }, [item.id]);
-
-  const grade = (correct) => {
-    onAnswer(item.id, correct);
-    setRevealed(false);
+    setPhase('q');
     setHint(false);
     onAdvance();
   };
 
-  // Show the example sentence(s) as a hint, or fully once revealed
-  const hasSentence = getSentences(item).length > 0;
-  const showSentence = (hint || revealed) && hasSentence;
+  const isWrite = type === 'write_meaning' || type === 'write_reading';
+  const revealed = phase === 'reveal';
 
-  return (
-    <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
-      <div style={{ position:'relative', width:'100%', minHeight:130 }}>
-        <div style={{ textAlign:'center' }}>
-          <div style={{ fontSize:12, color:C.muted, textTransform:'uppercase', letterSpacing:2, marginBottom:10 }}>What does this mean?</div>
-          <div style={{ fontSize:[...item.word].length<=6?44:([...item.word].length<=9?34:26), fontWeight:700, letterSpacing:2, color:C.ink, lineHeight:1.2, paddingBottom:8 }}>
-            <TappableKanji text={item.word} onTapKanji={onTapKanji} />
-          </div>
-          {revealed && <div style={{ fontSize:15, color:C.muted, marginTop:2 }}><KanaReading word={item.word} fallback={item.reading} /></div>}
-          {revealed && <div style={{ fontSize:11, color:C.muted, marginTop:8 }}>✓ {p.correct} · ✗ {p.wrong}</div>}
-        </div>
-        <div style={{ position:'absolute', right:0, top:0, display:'flex', flexDirection:'column', gap:8 }}>
-          <IconBtn symbol="✎" title="Edit word" onClick={()=>onEditWord && onEditWord(item)} />
-          <IconBtn symbol="あ" title="Furigana" toggle={true} active={furigana} onClick={onToggleFurigana} />
-          <IconBtn symbol="？" title="Hint (show example sentence)" disabled={hint || revealed || !hasSentence} onClick={()=>setHint(true)} />
-        </div>
-      </div>
+  // For "missing word": locate the target so we can render the parts around it
+  // as tappable text and the gap as a persistent underline. Returns {before, after}
+  // or null if the word can't be located in the sentence.
+  const clozeParts = (() => {
+    if (type !== 'missing' || !sentence) return null;
+    const ja = sentence.ja || '';
+    let needle = (item.word && ja.includes(item.word)) ? item.word : null;
+    if (!needle) { const stem = kanjiStem(item.word); if (stem && ja.includes(stem)) needle = stem; }
+    if (!needle) return { before: ja, after: '' }; // couldn't find it; show whole sentence, no blank
+    const i = ja.indexOf(needle);
+    return { before: ja.slice(0, i), after: ja.slice(i + needle.length), found: true };
+  })();
 
-      {revealed && (
-        <div style={{ textAlign:'center', background:C.paperDark, borderRadius:8, padding:'14px 16px', border:`1px solid ${C.line}` }}>
-          <div style={{ fontSize:20, fontWeight:600, color:C.ink }}>{item.meanings.join(', ')}</div>
-        </div>
-      )}
-
-      {showSentence && (
-        <div style={{ background:C.paperDark, borderRadius:8, padding:'12px 16px' }}>
-          {React.createElement(SentenceList, { item, word:item.word, reading:item.reading, showEn:revealed, furigana, onTapKanji:onTapKanji, onTapWord:onTapWord })}
-        </div>
-      )}
-
-      {!revealed ? (
-        <div style={{ display:'flex', gap:10, width:'100%' }}>
-          <button onClick={() => setRevealed(true)} style={{ ...btn(C.accent,'white'), width:'100%' }}>Reveal</button>
-        </div>
-      ) : (
-        <div style={{ display:'flex', gap:10, width:'100%' }}>
-          <button onClick={() => grade(false)} style={btn(C.wrong,'white')}>✗ Wrong</button>
-          <button onClick={() => grade(true)} style={btn(C.correct,'white')}>✓ Correct</button>
-        </div>
-      )}
+  // ── Shared bits ──────────────────────────────────────────────────────────
+  const statLine = <div style={{ fontSize:11, color:C.muted, marginTop:8 }}>✓ {p.correct} · ✗ {p.wrong}</div>;
+  const meaningBox = (
+    <div style={{ textAlign:'center', background:C.paperDark, borderRadius:8, padding:'14px 16px', border:`1px solid ${C.line}` }}>
+      <div style={{ fontSize:20, fontWeight:600, color:C.ink }}>{item.meanings.join(', ')}</div>
     </div>
   );
+  const wordReadingBox = (
+    <div style={{ textAlign:'center' }}>
+      <div style={{ fontSize:24, fontWeight:700, color:C.ink, marginBottom:4 }}>
+        <TappableKanji text={item.word} onTapKanji={onTapKanji} />
+      </div>
+      <div style={{ fontSize:15, color:C.muted }}><KanaReading word={item.word} fallback={item.reading} /></div>
+    </div>
+  );
+
+  // Icon strips per family
+  const writeStrip = (
+    <div style={{ display:'flex', flexDirection:'column', gap:8, flexShrink:0 }}>
+      <IconBtn symbol="✎" title="Edit word" onClick={()=>onEditWord && onEditWord(item)} />
+      <IconBtn symbol="画" title="Stroke order" toggle={true} active={showStrokes} onClick={onToggleStrokes} />
+      <IconBtn symbol="あ" title="Furigana" toggle={true} active={furigana} onClick={onToggleFurigana} />
+      <IconBtn symbol="文" title="Example sentence" toggle={true} active={showSentence} onClick={onToggleSentence} />
+      <IconBtn symbol="↺" title="Clear & rewrite" onClick={()=>setClearTrigger(t=>t+1)} />
+    </div>
+  );
+  const recogniseStrip = (
+    <div style={{ position:'absolute', right:0, top:0, display:'flex', flexDirection:'column', gap:8 }}>
+      <IconBtn symbol="✎" title="Edit word" onClick={()=>onEditWord && onEditWord(item)} />
+      <IconBtn symbol="あ" title="Furigana" toggle={true} active={furigana} onClick={onToggleFurigana} />
+      <IconBtn symbol="？" title="Hint (show example sentence)" disabled={hint || revealed || !hasSentence} onClick={()=>setHint(true)} />
+    </div>
+  );
+
+  const gradeBar = revealed ? (
+    <div style={{ display:'flex', gap:10, width:'100%' }}>
+      <button onClick={() => grade(false)} style={btn(C.wrong,'white')}>✗ Wrong</button>
+      <button onClick={() => grade(true)} style={btn(C.correct,'white')}>✓ Correct</button>
+    </div>
+  ) : (
+    <div style={{ display:'flex', gap:10, width:'100%' }}>
+      <button onClick={reveal} style={{ ...btn(C.accent,'white'), width:'100%' }}>Reveal</button>
+    </div>
+  );
+
+  // ── WRITE family (meaning OR reading) ──────────────────────────────────────
+  if (isWrite) {
+    const promptLabel = type === 'write_meaning' ? 'Write this word' : 'Write this reading';
+    return (
+      <div style={{ display:'flex', flexDirection:'column', gap:16, alignItems:'center' }}>
+        <div style={{ textAlign:'center', width:'100%' }}>
+          <div style={{ fontSize:12, color:C.muted, textTransform:'uppercase', letterSpacing:2, marginBottom:6 }}>{promptLabel}</div>
+          <div style={{ fontSize: type==='write_meaning'?30:34, fontWeight:700, color:C.ink }}>
+            {type === 'write_meaning'
+              ? promptMeanings.join(' · ')
+              : <KanaReading word={item.word} fallback={item.reading} />}
+          </div>
+          {statLine}
+        </div>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:10, width:'100%' }}>
+          <DrawCanvas clearTrigger={clearTrigger} />
+          {writeStrip}
+        </div>
+        {revealed && (
+          <div style={{ width:'100%' }}>
+            <div style={{ textAlign:'center', marginBottom:8 }}>
+              {type === 'write_reading' ? (
+                <React.Fragment>
+                  <div style={{ fontSize:24, fontWeight:700, color:C.ink, marginBottom:4 }}>
+                    <TappableKanji text={item.word} onTapKanji={onTapKanji} />
+                  </div>
+                  <div style={{ fontSize:15, color:C.muted }}>{item.meanings.join(', ')}</div>
+                </React.Fragment>
+              ) : (
+                <div style={{ fontSize:18, color:C.ink, fontWeight:600, marginBottom:6 }}>
+                  <TappableKanji text={item.word} onTapKanji={onTapKanji} /> · <KanaReading word={item.word} fallback={item.reading} />
+                </div>
+              )}
+              {showStrokes && <div style={{ marginTop:8 }}><StrokeOrder word={item.word} /></div>}
+            </div>
+            {showSentence && hasSentence && (
+              <div style={{ background:C.paperDark, borderRadius:8, padding:'12px 14px', width:'100%' }}>
+                {React.createElement(SentenceList, { item, word:item.word, reading:item.reading, showEn:true, furigana, onTapKanji, onTapWord })}
+              </div>
+            )}
+          </div>
+        )}
+        {gradeBar}
+      </div>
+    );
+  }
+
+  // ── RECOGNISE KANJI ────────────────────────────────────────────────────────
+  if (type === 'recognise') {
+    const showSent = (hint || revealed) && hasSentence;
+    return (
+      <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+        <div style={{ position:'relative', width:'100%', minHeight:130 }}>
+          <div style={{ textAlign:'center' }}>
+            <div style={{ fontSize:12, color:C.muted, textTransform:'uppercase', letterSpacing:2, marginBottom:10 }}>What does this mean?</div>
+            <div style={{ fontSize:[...item.word].length<=6?44:([...item.word].length<=9?34:26), fontWeight:700, letterSpacing:2, color:C.ink, lineHeight:1.2, paddingBottom:8 }}>
+              <TappableKanji text={item.word} onTapKanji={onTapKanji} />
+            </div>
+            {revealed && <div style={{ fontSize:15, color:C.muted, marginTop:2 }}><KanaReading word={item.word} fallback={item.reading} /></div>}
+            {revealed && statLine}
+          </div>
+          {recogniseStrip}
+        </div>
+        {revealed && meaningBox}
+        {showSent && (
+          <div style={{ background:C.paperDark, borderRadius:8, padding:'12px 16px' }}>
+            {React.createElement(SentenceList, { item, word:item.word, reading:item.reading, showEn:revealed, furigana, onTapKanji, onTapWord })}
+          </div>
+        )}
+        {gradeBar}
+      </div>
+    );
+  }
+
+  // ── SENTENCE TRANSLATION ────────────────────────────────────────────────────
+  if (type === 'sentence') {
+    return (
+      <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+        <div style={{ textAlign:'center' }}>
+          <div style={{ fontSize:12, color:C.muted, textTransform:'uppercase', letterSpacing:2, marginBottom:12 }}>What does this mean?</div>
+          <div style={{ fontSize:23, lineHeight:2, color:C.ink }}>
+            {React.createElement(TappableSentence, { sentence: sentence.ja, furigana, onTapWord })}
+          </div>
+          <div style={{ display:'flex', gap:8, justifyContent:'center', marginTop:14 }}>
+            <IconBtn symbol="✎" title="Edit word" onClick={()=>onEditWord && onEditWord(item)} />
+            <IconBtn symbol="あ" title="Furigana" toggle={true} active={furigana} onClick={onToggleFurigana} />
+          </div>
+        </div>
+        {revealed && (
+          <div style={{ textAlign:'center', background:C.paperDark, borderRadius:8, padding:'14px 16px', border:`1px solid ${C.line}` }}>
+            {sentence.en && <div style={{ fontSize:15, color:C.muted, marginBottom:10, lineHeight:1.5 }}>{sentence.en}</div>}
+            <div style={{ fontSize:16, fontWeight:600, color:C.ink }}>
+              <TappableKanji text={item.word} onTapKanji={onTapKanji} /> · <KanaReading word={item.word} fallback={item.reading} />
+            </div>
+            <div style={{ fontSize:14, color:C.ink, marginTop:4 }}>{item.meanings.join(', ')}</div>
+            {statLine}
+          </div>
+        )}
+        {gradeBar}
+      </div>
+    );
+  }
+
+  // ── MISSING WORD (cloze) ────────────────────────────────────────────────────
+  if (type === 'missing') {
+    // Reserve the exact width the answer word will occupy, so filling the blank
+    // on reveal doesn't reflow the sentence. ~1em per CJK char, min 2.5em.
+    const wordLen = [...(item.word || '')].length || 2;
+    // Reserve ~1em per char, but cap so long words don't overflow the line.
+    const blankW = Math.min(Math.max(wordLen, 2.5), 4.5) + 'em';
+    const slotStyle = { position:'relative', display:'inline-block', minWidth:blankW, textAlign:'center',
+      margin:'0 2px', color:C.accent, fontWeight:700, whiteSpace:'nowrap' };
+    const underline = <span style={{ position:'absolute', left:0, right:0, bottom:6, height:2, background:C.accent }} />;
+    return (
+      <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+        <div style={{ textAlign:'center' }}>
+          <div style={{ fontSize:12, color:C.muted, textTransform:'uppercase', letterSpacing:2, marginBottom:12 }}>Which word is missing?</div>
+          <div style={{ fontSize:23, lineHeight:2, color:C.ink }}>
+            {clozeParts && clozeParts.found ? (
+              <React.Fragment>
+                {clozeParts.before && React.createElement(TappableSentence, { key:'b', sentence: clozeParts.before, furigana, onTapWord })}
+                <span style={slotStyle}>
+                  {revealed
+                    ? <TappableKanji text={item.word} onTapKanji={onTapKanji} />
+                    : '\u3000'}
+                  {underline}
+                </span>
+                {clozeParts.after && React.createElement(TappableSentence, { key:'a', sentence: clozeParts.after, furigana, onTapWord })}
+              </React.Fragment>
+            ) : (
+              React.createElement(TappableSentence, { sentence: sentence.ja, furigana, onTapWord })
+            )}
+          </div>
+          {(hint || revealed) && sentence.en && <div style={{ fontSize:14, color:C.muted, marginTop:10, lineHeight:1.5 }}>{sentence.en}</div>}
+          <div style={{ display:'flex', gap:8, justifyContent:'center', marginTop:14 }}>
+            <IconBtn symbol="✎" title="Edit word" onClick={()=>onEditWord && onEditWord(item)} />
+            <IconBtn symbol="あ" title="Furigana" toggle={true} active={furigana} onClick={onToggleFurigana} />
+            <IconBtn symbol="？" title="Hint (show translation)" disabled={hint || revealed || !sentence.en} onClick={()=>setHint(true)} />
+          </div>
+        </div>
+        {revealed && (
+          <div style={{ textAlign:'center', background:C.paperDark, borderRadius:8, padding:'14px 16px', border:`1px solid ${C.line}` }}>
+            <div style={{ fontSize:22, fontWeight:700, color:C.ink, marginBottom:4 }}>
+              <TappableKanji text={item.word} onTapKanji={onTapKanji} />
+            </div>
+            <div style={{ fontSize:15, color:C.muted }}><KanaReading word={item.word} fallback={item.reading} /></div>
+            <div style={{ fontSize:14, color:C.ink, marginTop:6 }}>{item.meanings.join(', ')}</div>
+            {statLine}
+          </div>
+        )}
+        {gradeBar}
+      </div>
+    );
+  }
+
+  return null;
 }
+
 
 // Defined at module scope so it isn't recreated each render (which drops input focus)
 function FormField({ label, value, setter, placeholder, hint, clearError }) {
@@ -1837,7 +1988,7 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
 
 // -- Account screen - full page for sync ID management --------------------
 function AccountScreen({ onClose, onReset, onLogout, onExport, onDeleteAll, sessionSize, onSessionSize, masteryTarget, onMasteryTarget,
-    theme, onSetTheme, customAccent, customBase, onSetCustomColors, firstRun }) {
+    theme, onSetTheme, customAccent, customBase, onSetCustomColors, studyTypes, onToggleStudyType, firstRun }) {
   const [userId, setUserIdState] = React.useState(getUserId());
   const [input, setInput] = React.useState('');
   const [copied, setCopied] = React.useState(false);
@@ -1993,6 +2144,32 @@ function AccountScreen({ onClose, onReset, onLogout, onExport, onDeleteAll, sess
     ),
 
     themeSelector,
+    React.createElement('div', { style: { height: 1, background: C.line, marginBottom: 24 } }),
+
+    React.createElement('div', { style: { fontSize: 14, color: C.ink, fontWeight: 600, marginBottom: 8 } }, 'Study type'),
+    React.createElement('div', { style: { color: C.muted, fontSize: 13, marginBottom: 12, lineHeight: 1.6 } },
+      'Select the practice methods that best fit your needs.'),
+    React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 28 } },
+      STUDY_TYPES.map(t => {
+        const on = (studyTypes || []).includes(t.id);
+        return React.createElement('button', { key: t.id, onClick: () => onToggleStudyType(t.id),
+          style: { display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left', width: '100%',
+            padding: '12px 14px', borderRadius: 8, cursor: 'pointer',
+            border: `1px solid ${C.line}`, background: C.card } },
+          React.createElement('span', { style: { flex: 1, minWidth: 0 } },
+            React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: C.ink } }, t.name),
+            React.createElement('span', { style: { fontSize: 12, color: C.muted } }, ': ' + t.desc)
+          ),
+          // On/off toggle switch
+          React.createElement('span', { style: { flexShrink: 0, width: 38, height: 22, borderRadius: 999,
+            background: on ? C.accent : C.line, position: 'relative', transition: 'background 0.15s' } },
+            React.createElement('span', { style: { position: 'absolute', top: 2, left: on ? 18 : 2,
+              width: 18, height: 18, borderRadius: '50%', background: 'white',
+              boxShadow: '0 1px 2px rgba(0,0,0,0.3)', transition: 'left 0.15s' } })
+          )
+        );
+      })
+    ),
     React.createElement('div', { style: { height: 1, background: C.line, marginBottom: 24 } }),
 
     React.createElement('div', { style: { fontSize: 14, color: C.ink, fontWeight: 600, marginBottom: 8 } }, 'Words per session'),
@@ -2591,7 +2768,7 @@ function App() {
   const [progress, setProgress] = useState({});
   const [mode, setModeState] = useState(() => {
     const m = localStorage.getItem(MODE_KEY);
-    return ['write','quiz','words','read','kanji'].includes(m) ? m : 'write';
+    return ['study','words','read','kanji'].includes(m) ? m : 'study';
   });
   const setMode = (m) => { setModeState(m); try { localStorage.setItem(MODE_KEY, m); } catch {} };
   const [ready, setReady] = useState(false);
@@ -2629,6 +2806,14 @@ function App() {
   const toggleStrokes = () => setShowStrokesState(s => { const next = !s; try { localStorage.setItem('kanji-strokes', next ? 'on' : 'off'); } catch {} return next; });
   const [showSentence, setShowSentenceState] = useState(() => localStorage.getItem('kanji-write-sentence') !== 'off');
   const toggleSentence = () => setShowSentenceState(s => { const next = !s; try { localStorage.setItem('kanji-write-sentence', next ? 'on' : 'off'); } catch {} return next; });
+  const [studyTypes, setStudyTypesState] = useState(loadStudyTypes);
+  const toggleStudyType = (id) => setStudyTypesState(prev => {
+    const has = prev.includes(id);
+    let next = has ? prev.filter(x => x !== id) : [...prev, id];
+    if (!next.length) next = prev; // keep at least one enabled
+    saveStudyTypes(next);
+    return next;
+  });
   const [editWordTarget, setEditWordTarget] = useState(null); // word being edited from practice tabs
   const [welcomeId, setWelcomeId] = useState(null); // first-run: show user their Sync ID once
   const setThemeMode = (next) => { applyTheme(next); setTheme(next); };
@@ -2926,6 +3111,7 @@ function App() {
       sessionSize, onSessionSize:setSessionSize,
       masteryTarget, onMasteryTarget:setMasteryTarget,
       theme, onSetTheme:setThemeMode, customAccent, customBase, onSetCustomColors:setCustomColors,
+      studyTypes, onToggleStudyType:toggleStudyType,
       firstRun: !items }));
 
   if (!items) return React.createElement('div', {
@@ -2983,7 +3169,7 @@ function App() {
       display:'flex', alignItems:'center', justifyContent:'space-between', gap:8, flexWrap:'wrap' }},
       React.createElement('div', { style:{ fontSize:18, fontWeight:700, flexShrink:0 } }, '漢字'),
       React.createElement('div', { style:{ display:'flex', gap:1, flexWrap:'wrap', justifyContent:'flex-end' } },
-        [['write','Write'],['quiz','Quiz'],['words','Words'],['read','Read'],['kanji','Dict'],['account','⚙']].map(([m,label])=>
+        [['study','Study'],['words','Words'],['read','Read'],['kanji','Dictionary'],['account','⚙']].map(([m,label])=>
           React.createElement('button', { key:m, onClick:()=> m==='account' ? setShowAccount(true) : setMode(m), style:{
             padding:'6px 7px', borderRadius:6, border:'none',
             background:mode===m? (bestText(C.header)==='white'?'rgba(255,255,255,0.2)':'rgba(0,0,0,0.12)') :'transparent',
@@ -3002,12 +3188,9 @@ function App() {
       onMarkMastered:()=>{ markMastered(editWordTarget.id); setEditWordTarget(null); advanceDeck(); },
       onTapWord:setWordPopup }),
     React.createElement('div', { style:{ maxWidth:420, margin:'0 auto', padding:20, minHeight:'calc(100vh - 60px)' } },
-      mode==='write' && (deckEmpty
+      mode==='study' && (deckEmpty
         ? React.createElement('div', { style:{ textAlign:'center', color:C.muted, padding:'40px 20px' } }, 'No active words. Add some in the Words tab.')
-        : React.createElement(WriteMode, { items:deck, progress, idx:Math.min(deckIdx, deck.length-1), onAdvance:advanceDeck, onAnswer:handleAnswer, onCurrentWord:(id)=>{currentWordRef.current=id;}, onTapKanji:setKanjiPopup, onTapWord:setWordPopup, onEditWord:setEditWordTarget, furigana, onToggleFurigana:toggleFurigana, showStrokes, onToggleStrokes:toggleStrokes, showSentence, onToggleSentence:toggleSentence })),
-      mode==='quiz' && (deckEmpty
-        ? React.createElement('div', { style:{ textAlign:'center', color:C.muted, padding:'40px 20px' } }, 'No active words. Add some in the Words tab.')
-        : React.createElement(QuizMode, { items:deck, progress, idx:Math.min(deckIdx, deck.length-1), onAdvance:advanceDeck, onAnswer:handleAnswer, onCurrentWord:(id)=>{currentWordRef.current=id;}, onTapKanji:setKanjiPopup, onTapWord:setWordPopup, onEditWord:setEditWordTarget, furigana, onToggleFurigana:toggleFurigana })),
+        : React.createElement(StudyMode, { items:deck, progress, idx:Math.min(deckIdx, deck.length-1), onAdvance:advanceDeck, onAnswer:handleAnswer, onCurrentWord:(id)=>{currentWordRef.current=id;}, onTapKanji:setKanjiPopup, onTapWord:setWordPopup, onEditWord:setEditWordTarget, furigana, onToggleFurigana:toggleFurigana, showStrokes, onToggleStrokes:toggleStrokes, showSentence, onToggleSentence:toggleSentence, studyTypes })),
       mode==='words' && React.createElement(WordsMode, { items, progress, onRemove:handleRemove, onAdd:handleAdd, onEdit:handleEdit, onMerge:handleMerge, onResetWord:resetWord, onMarkMastered:markMastered, activeIds:activeIds||[], onAddToActive:addToActive, onRemoveFromActive:removeFromActive, onAddAllToActive:addAllToActive, onEmptyActive:emptyActive, masteryTarget, onTapKanji:setKanjiPopup, onTapWord:setWordPopup, onReshuffle:reshuffle }),
       mode==='read' && React.createElement(ReadMode, { onTapWord:setWordPopup,
         raw:readRaw, setRaw:setReadRaw, processed:readProcessed, setProcessed:setReadProcessed }),
