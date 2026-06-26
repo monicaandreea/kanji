@@ -16,7 +16,7 @@
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: #f7f4ee; font-family: 'Segoe UI', system-ui, sans-serif; min-height: 100vh; }
   ruby { ruby-align: center; }
-  ruby rt { font-size: 0.5em; color: #8a8478; line-height: 1; user-select: none; }
+  ruby rt { font-size: 0.6em; color: #8a8478; line-height: 1; user-select: none; }
   button { font-family: inherit; }
   textarea, input { font-family: inherit; }
 </style>
@@ -1019,10 +1019,10 @@ function SentenceDisplay({ sentence, sentenceEn, word, reading, showEn, onTapKan
       : React.createElement('span', null, sentence);
   }
 
-  return React.createElement('div', { style: { fontSize: 17, lineHeight: 2.2, color: C.ink } },
+  return React.createElement('div', { style: { fontSize: 19, lineHeight: 2.2, color: C.ink } },
     React.createElement('div', null, inner),
     showEn && sentenceEn && React.createElement('div', {
-      style: { color: C.muted, fontSize: 12, marginTop: 8, lineHeight: 1.5 }
+      style: { color: C.muted, fontSize: 13, marginTop: 8, lineHeight: 1.5 }
     }, sentenceEn)
   );
 }
@@ -1219,9 +1219,19 @@ function WordPopup({ token, onClose, onAdd, existing }) {
     let alive = true;
     setInfo(undefined); setAdded(false);
     (async () => {
-      // Try dictionary form, then surface form, then kana reading
-      const candidates = [activeToken.basic, activeToken.surface, kataToHira(activeToken.reading)]
-        .filter((v, i, a) => v && a.indexOf(v) === i);
+      // Build lookup candidates. For words written with kanji, only try the
+      // kanji forms (dictionary + surface) — never the kana reading, or a
+      // homophone like 口/くち would hijack 朽ちる. Kana-only words may use the reading.
+      const hasKanji = s => s && [...s].some(isKanjiChar);
+      const basic = activeToken.basic, surface = activeToken.surface;
+      const kana = kataToHira(activeToken.reading);
+      let candidates;
+      if (hasKanji(basic) || hasKanji(surface)) {
+        candidates = [basic, surface].filter(Boolean);
+      } else {
+        candidates = [basic, surface, kana].filter(Boolean);
+      }
+      candidates = candidates.filter((v, i, a) => a.indexOf(v) === i);
       let result = null;
       for (const c of candidates) {
         result = await fetchWordInfo(c);
