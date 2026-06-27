@@ -318,6 +318,7 @@ const CUSTOM_BASE_KEY = "kanji-custom-base"; // 'light' | 'dark'
 const PALETTE_KEY = "kanji-custom-palette";  // user's saved accent swatches
 const MODE_KEY = "kanji-mode";
 const STUDY_TYPES_KEY = "kanji-study-types"; // which practice types are enabled
+const COLOR_WORDS_KEY = "kanji-color-words"; // colour sentence words by their status
 // The 5 study (practice) types. `id` is stored; `needsSentence` filters eligibility.
 const STUDY_TYPES = [
   { id: 'write_meaning', name: 'Write (meaning)', desc: 'see English, write the kanji' },
@@ -487,6 +488,35 @@ function wordMastered(p, target) {
   if (p.mastered) return true;
   return (p.streak || 0) >= target;
 }
+
+// Build a lookup from a word's surface/reading/stem to its study status, for
+// colouring sentence words. Status: 'mastered' | 'studying' | 'inlist'.
+function buildWordStatusMap(items, progress, masteryTarget) {
+  const map = {};
+  (items || []).forEach(it => {
+    const p = progress[it.id] || {};
+    let status;
+    if (wordMastered(p, masteryTarget)) status = 'mastered';
+    else if ((p.correct||0)+(p.wrong||0) > 0) status = 'studying';
+    else status = 'inlist';
+    [it.word, it.reading, kanjiStem(it.word)].filter(Boolean).forEach(k => { if (!map[k]) map[k] = status; });
+  });
+  return map;
+}
+function tokenStatus(tok, statusMap) {
+  if (!statusMap) return null;
+  const cands = [tok.basic, tok.surface, kataToHira(tok.reading || '')].filter(Boolean);
+  for (const c of cands) { if (statusMap[c]) return statusMap[c]; }
+  const stem = kanjiStem(tok.surface || tok.basic || '');
+  if (stem && statusMap[stem]) return statusMap[stem];
+  return null;
+}
+const STATUS_COLOR_KEY = { inlist: 'muted', studying: 'gold', mastered: 'correct' };
+// Module-level holder so TappableSentence can colour words without prop-drilling
+// through every intermediate component. Set by App when the setting is on.
+let _wordStatusMap = null;
+
+
 
 // Split a comma-separated meanings string, but ignore commas inside parentheses
 // so "cup (drinking vessel, etc.), measure" stays as two meanings, not four.
@@ -1376,7 +1406,8 @@ function WordPopup({ token, onClose, onAdd, existing }) {
 }
 
 // Renders a Japanese sentence as tappable word tokens (with furigana).
-function TappableSentence({ sentence, onTapWord, furigana = true }) {
+function TappableSentence({ sentence, onTapWord, furigana = true, statusMap }) {
+  if (statusMap === undefined) statusMap = _wordStatusMap;
   const [tokens, setTokens] = React.useState(null);
   React.useEffect(() => {
     if (!sentence) return;
@@ -1395,13 +1426,17 @@ function TappableSentence({ sentence, onTapWord, furigana = true }) {
       if (!tappable) return React.createElement('span', { key: i }, t.surface);
       const hira = kataToHira(t.reading);
       const hasFuri = hira && [...(t.surface||'')].some(isKanjiChar) && hira !== t.surface;
+      // Optional status colour for the word (in-list / studying / mastered).
+      const st = statusMap ? tokenStatus(t, statusMap) : null;
+      const stColor = st ? C[STATUS_COLOR_KEY[st]] : null;
       // Always render the ruby structure when a reading exists, but hide the rt
       // text when furigana is toggled off. This reserves the vertical space so
       // the sentence doesn't shift/reflow when toggling furigana on and off.
       return React.createElement('span', {
         key: i,
         onClick: () => onTapWord(t),
-        style: { cursor: 'pointer', borderBottom: `1px dotted ${C.gold}`, paddingBottom: 1 }
+        style: { cursor: 'pointer', borderBottom: `1px dotted ${C.gold}`, paddingBottom: 1,
+          ...(stColor ? { color: stColor } : {}) }
       }, hasFuri
         ? React.createElement('ruby', null, t.surface,
             React.createElement('rt', { style: furigana ? undefined : { visibility: 'hidden' } }, hira))
@@ -2043,7 +2078,7 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
 
 // -- Account screen - full page for sync ID management --------------------
 function AccountScreen({ onClose, onReset, onLogout, onExport, onDeleteAll, sessionSize, onSessionSize, masteryTarget, onMasteryTarget,
-    theme, onSetTheme, customAccent, customBase, onSetCustomColors, studyTypes, onToggleStudyType, firstRun }) {
+    theme, onSetTheme, customAccent, customBase, onSetCustomColors, studyTypes, onToggleStudyType, colorWords, onToggleColorWords, firstRun }) {
   const [userId, setUserIdState] = React.useState(getUserId());
   const [input, setInput] = React.useState('');
   const [copied, setCopied] = React.useState(false);
@@ -2204,6 +2239,21 @@ function AccountScreen({ onClose, onReset, onLogout, onExport, onDeleteAll, sess
     ),
 
     themeSelector,
+    React.createElement('button', { onClick: onToggleColorWords,
+      style: { display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left', width: '100%',
+        padding: '12px 14px', borderRadius: 8, cursor: 'pointer', border: `1px solid ${C.line}`,
+        background: C.card, marginTop: 14, marginBottom: 24 } },
+      React.createElement('span', { style: { flex: 1, minWidth: 0 } },
+        React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: C.ink } }, 'Colour-code words'),
+        React.createElement('span', { style: { fontSize: 12, color: C.muted, display: 'block', marginTop: 2 } }, 'tints words in sentences by their status')
+      ),
+      React.createElement('span', { style: { flexShrink: 0, width: 40, height: 23, borderRadius: 999,
+        background: colorWords ? C.accent : C.line, position: 'relative', transition: 'background .15s' } },
+        React.createElement('span', { style: { position: 'absolute', top: 2, left: colorWords ? 19 : 2,
+          width: 19, height: 19, borderRadius: '50%', background: 'white', transition: 'left .15s',
+          boxShadow: '0 1px 2px rgba(0,0,0,0.3)' } })
+      )
+    ),
     React.createElement('div', { style: { height: 1, background: C.line, marginBottom: 24 } }),
 
     React.createElement('div', { style: { fontSize: 14, color: C.ink, fontWeight: 600, marginBottom: 8 } }, 'Study type'),
@@ -2230,6 +2280,7 @@ function AccountScreen({ onClose, onReset, onLogout, onExport, onDeleteAll, sess
         );
       })
     ),
+
     React.createElement('div', { style: { height: 1, background: C.line, marginBottom: 24 } }),
 
     React.createElement('div', { style: { fontSize: 14, color: C.ink, fontWeight: 600, marginBottom: 8 } }, 'Words per session'),
@@ -2389,14 +2440,23 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
   const [showAddList, setShowAddList] = useState(false);
   const [editing, setEditing] = useState(null);
   const [search, setSearch] = useState('');
-  const [sortMode, setSortMode] = useState('alpha'); // 'alpha' | 'active'
+  const [sortMode, setSortMode] = useState('alpha'); // 'active' | 'alpha' | 'progress' | 'date'
+  const [sortDir, setSortDir] = useState(1); // 1 = ascending, -1 = descending (for alpha/progress/date)
+  const [activeSortNonce, setActiveSortNonce] = useState(0);
+  const [sortMenuOpen, setSortMenuOpen] = useState(false);
+  // Tapping a sortable mode: switch to it, or flip direction if already on it.
+  const pickSort = (m) => {
+    if (m === 'active') { setSortMode('active'); setActiveSortNonce(n => n + 1); return; }
+    if (sortMode === m) setSortDir(d => -d);
+    else { setSortMode(m); setSortDir(m === 'date' ? -1 : 1); }
+  };
   const [filter, setFilter] = useState('all'); // all | studied | mastered | new
   // Snapshot of which words count as "active" for SORTING purposes. Re-frozen
   // when the view context changes (incl. switching sort mode), but NOT when a
   // single word is toggled - so toggling doesn't bounce the scroll.
   const sortActiveRef = React.useRef(null);
   const sortCtxRef = React.useRef('');
-  const sortCtx = `${filter}|${search}|${sortMode}`;
+  const sortCtx = `${filter}|${search}|${sortMode}|${sortDir}|${activeSortNonce}`;
   const activeFirst = sortMode === 'active';
   if (sortCtxRef.current !== sortCtx || sortActiveRef.current === null) {
     sortCtxRef.current = sortCtx;
@@ -2458,6 +2518,10 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
     const r = (it.reading||'').toLowerCase();
     return w===q || r===q || readingSearchKey(r)===readingSearchKey(q);
   };
+  // Date-added proxy: position in the original items array (append order).
+  const orderIndex = React.useMemo(() => {
+    const m = {}; items.forEach((it, i) => { m[it.id] = i; }); return m;
+  }, [items]);
   const sorted = [...filtered].sort((a,b)=>{
     // When searching, exact matches float to the very top, above partials.
     if (q) {
@@ -2467,14 +2531,21 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
     if (activeFirst) {
       const aa=sortActiveSet.has(a.id)?0:1, bb=sortActiveSet.has(b.id)?0:1;
       if (aa!==bb) return aa-bb;
+      // within active grouping, keep alphabetical
+      return compareReading(a, b);
     }
-    // "Studying" stays ordered by most-practiced; everything else is
-    // alphabetical by reading (Japanese gojūon order, romaji-aware)
-    if (filter==='studied') {
+    if (sortMode === 'progress') {
       const pa=progress[a.id]||{}, pb=progress[b.id]||{};
-      return ((pb.correct||0)+(pb.wrong||0))-((pa.correct||0)+(pa.wrong||0));
+      const sa = wordMastered(pa, masteryTarget) ? (masteryTarget+1) : (pa.streak||0);
+      const sb = wordMastered(pb, masteryTarget) ? (masteryTarget+1) : (pb.streak||0);
+      if (sa!==sb) return (sa-sb)*sortDir;
+      return compareReading(a, b);
     }
-    return compareReading(a, b);
+    if (sortMode === 'date') {
+      return ((orderIndex[a.id]||0)-(orderIndex[b.id]||0))*sortDir;
+    }
+    // alpha (default)
+    return compareReading(a, b)*sortDir;
   });
   // Show each label whenever its group has results (independent of the other).
   const hasExact = q && sorted.some(isExactMatch);
@@ -2519,28 +2590,49 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
             background:'none', border:'none', color:C.muted, cursor:'pointer', fontSize:16 } }, '✕')}
       </div>
 
-      {/* Active-set actions: add all shown · empty · shuffle · sort toggle */}
+      {/* Active-set actions + sort dropdown */}
       <div style={{ display:'flex', alignItems:'center', justifyContent:'flex-end', gap:8, marginTop:-6, flexWrap:'wrap' }}>
-        <button onClick={()=>onAddAllToActive && onAddAllToActive(sorted.map(w=>w.id))}
-          style={{ background:C.card, color:C.muted, border:`1px solid ${C.line}`, borderRadius:6,
-            padding:'5px 10px', fontSize:12, cursor:'pointer' }}>
-          Add all
-        </button>
-        <button onClick={()=>onEmptyActive && onEmptyActive()}
-          style={{ background:C.card, color:C.muted, border:`1px solid ${C.line}`, borderRadius:6,
-            padding:'5px 10px', fontSize:12, cursor:'pointer' }}>
-          Empty all
-        </button>
-        {onReshuffle && <button onClick={()=>onReshuffle()}
-          style={{ background:C.card, color:C.muted, border:`1px solid ${C.line}`, borderRadius:6,
-            padding:'5px 10px', fontSize:12, cursor:'pointer' }}>
-          Shuffle
-        </button>}
-        <button onClick={()=>setSortMode(m=> m==='alpha' ? 'active' : 'alpha')}
-          style={{ background:C.card, color:C.muted, border:`1px solid ${C.line}`, borderRadius:6,
-            padding:'5px 10px', fontSize:12, cursor:'pointer' }}>
-          {sortMode==='active' ? '↑ Active cards' : '↑ Alphabetical'}
-        </button>
+        {(() => {
+          const btnStyle = { background:C.card, color:C.muted, border:`1px solid ${C.line}`, borderRadius:6,
+            padding:'5px 10px', fontSize:12, cursor:'pointer' };
+          // Highlight the Sort button when a non-default sort is active.
+          const sortActive = !(sortMode === 'alpha' && sortDir === 1);
+          const menuItem = (mode) => {
+            const on = sortMode === mode;
+            let text = mode==='active' ? 'Active'
+              : mode==='alpha' ? (on && sortDir===-1 ? 'ん→あ' : 'あ→ん')
+              : mode==='progress' ? ('Progress' + (on ? (sortDir===1?' ↑':' ↓') : ''))
+              : (mode==='date' ? ('Date' + (on ? (sortDir===-1?' ↓':' ↑') : '')) : mode);
+            return React.createElement('button', { key:mode,
+              onClick:()=>{ pickSort(mode); setSortMenuOpen(false); },
+              style:{ display:'block', width:'100%', textAlign:'left', padding:'9px 14px',
+                background: on ? C.accent : 'transparent', color: on ? bestText(C.accent) : C.ink,
+                border:'none', borderBottom:`1px solid ${C.line}`, fontSize:13,
+                fontWeight: on?600:400, cursor:'pointer' } }, text);
+          };
+          return React.createElement(React.Fragment, null,
+            React.createElement('button', { onClick:()=>onAddAllToActive && onAddAllToActive(sorted.map(w=>w.id)), style:btnStyle }, 'Add all'),
+            React.createElement('button', { onClick:()=>onEmptyActive && onEmptyActive(), style:btnStyle }, 'Remove all'),
+            onReshuffle && React.createElement('button', { onClick:()=>onReshuffle(), style:btnStyle }, 'Shuffle'),
+            React.createElement('div', { style:{ position:'relative' } },
+              React.createElement('button', { onClick:()=>setSortMenuOpen(o=>!o),
+                style:{ ...btnStyle, fontWeight:600,
+                  background: sortActive ? C.accent : C.card,
+                  color: sortActive ? bestText(C.accent) : C.muted,
+                  border:`1px solid ${sortActive ? C.accent : C.line}` } },
+                'Sort ▾'),
+              sortMenuOpen && React.createElement('div', {
+                onClick:()=>setSortMenuOpen(false),
+                style:{ position:'fixed', inset:0, zIndex:55 } }),
+              sortMenuOpen && React.createElement('div', {
+                style:{ position:'absolute', right:0, top:'calc(100% + 4px)', zIndex:60,
+                  background:C.card, border:`1px solid ${C.line}`, borderRadius:8, overflow:'hidden',
+                  minWidth:130, boxShadow:'0 4px 16px rgba(0,0,0,0.18)' } },
+                menuItem('active'), menuItem('alpha'), menuItem('progress'), menuItem('date')
+              )
+            )
+          );
+        })()}
       </div>
 
       <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
@@ -2880,6 +2972,8 @@ function App() {
     saveStudyTypes(next);
     return next;
   });
+  const [colorWords, setColorWordsState] = useState(() => localStorage.getItem(COLOR_WORDS_KEY) === 'on');
+  const toggleColorWords = () => setColorWordsState(v => { const next = !v; try { localStorage.setItem(COLOR_WORDS_KEY, next ? 'on' : 'off'); } catch {} return next; });
   const [editWordTarget, setEditWordTarget] = useState(null); // word being edited from practice tabs
   const [welcomeId, setWelcomeId] = useState(null); // first-run: show user their Sync ID once
   const setThemeMode = (next) => { applyTheme(next); setTheme(next); };
@@ -2904,6 +2998,11 @@ function App() {
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, []);
+
+  // Maintain the module-level word-status map used to colour sentence words.
+  React.useEffect(() => {
+    _wordStatusMap = colorWords ? buildWordStatusMap(items || [], progress, masteryTarget) : null;
+  }, [colorWords, items, progress, masteryTarget]);
 
   useEffect(() => {
     (async () => {
@@ -3193,6 +3292,7 @@ function App() {
       masteryTarget, onMasteryTarget:setMasteryTarget,
       theme, onSetTheme:setThemeMode, customAccent, customBase, onSetCustomColors:setCustomColors,
       studyTypes, onToggleStudyType:toggleStudyType,
+      colorWords, onToggleColorWords:toggleColorWords,
       firstRun: !items }));
 
   if (!items) return React.createElement('div', {
