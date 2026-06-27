@@ -493,22 +493,37 @@ function wordMastered(p, target) {
 // colouring sentence words. Status: 'mastered' | 'studying' | 'inlist'.
 function buildWordStatusMap(items, progress, masteryTarget) {
   const map = {};
+  const put = (k, status) => { if (k && !map[k]) map[k] = status; };
   (items || []).forEach(it => {
     const p = progress[it.id] || {};
     let status;
     if (wordMastered(p, masteryTarget)) status = 'mastered';
     else if ((p.correct||0)+(p.wrong||0) > 0) status = 'studying';
     else status = 'inlist';
-    [it.word, it.reading, kanjiStem(it.word)].filter(Boolean).forEach(k => { if (!map[k]) map[k] = status; });
+    const w = it.word || '';
+    put(w, status);
+    // Only index the reading as a key when the word itself is written in kana
+    // (no kanji). Otherwise a shared reading would false-match unrelated words
+    // (e.g. tagging わたる just because some kanji word reads わたる).
+    const hasKanji = [...w].some(isKanjiChar);
+    if (!hasKanji && it.reading) put(kataToHira(it.reading), status);
   });
   return map;
 }
 function tokenStatus(tok, statusMap) {
   if (!statusMap) return null;
-  const cands = [tok.basic, tok.surface, kataToHira(tok.reading || '')].filter(Boolean);
+  // Match on the actual word form (dictionary or surface). Reading is only
+  // matched against kana words (handled at map-build time), so look the token's
+  // kana up too — it'll only hit kana-word entries, not kanji homophones.
+  const cands = [tok.basic, tok.surface].filter(Boolean);
   for (const c of cands) { if (statusMap[c]) return statusMap[c]; }
-  const stem = kanjiStem(tok.surface || tok.basic || '');
-  if (stem && statusMap[stem]) return statusMap[stem];
+  // For a kana token, allow a reading match (will only hit kana-word keys).
+  const surface = tok.surface || '';
+  const isKana = surface && ![...surface].some(isKanjiChar);
+  if (isKana) {
+    const hira = kataToHira(tok.basic || tok.surface || '');
+    if (statusMap[hira]) return statusMap[hira];
+  }
   return null;
 }
 const STATUS_COLOR_KEY = { inlist: 'muted', studying: 'gold', mastered: 'correct' };
