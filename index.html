@@ -1587,10 +1587,22 @@ function StudyMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTap
     if (type !== 'missing' || !sentence) return null;
     const ja = sentence.ja || '';
     let needle = (item.word && ja.includes(item.word)) ? item.word : null;
-    if (!needle) { const stem = kanjiStem(item.word); if (stem && ja.includes(stem)) needle = stem; }
-    if (!needle) return { before: ja, after: '' }; // couldn't find it; show whole sentence, no blank
+    // If the dictionary form isn't literally present, try to match the
+    // conjugated surface: take the kanji stem and extend it through any
+    // following kana (okurigana / inflection) so 残る blanks 残って, not just 残.
+    if (!needle) {
+      const stem = kanjiStem(item.word);
+      if (stem && ja.includes(stem)) {
+        let i = ja.indexOf(stem);
+        let end = i + stem.length;
+        // extend across trailing hiragana (the inflected tail)
+        while (end < ja.length && ja[end] >= 'ぁ' && ja[end] <= 'ん') end++;
+        needle = ja.slice(i, end);
+      }
+    }
+    if (!needle) return { before: ja, after: '', answer: item.word }; // couldn't find it
     const i = ja.indexOf(needle);
-    return { before: ja.slice(0, i), after: ja.slice(i + needle.length), found: true };
+    return { before: ja.slice(0, i), after: ja.slice(i + needle.length), answer: needle, found: true };
   })();
 
   // ── Shared bits ──────────────────────────────────────────────────────────
@@ -1748,7 +1760,8 @@ function StudyMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTap
   if (type === 'missing') {
     // Reserve the exact width the answer word will occupy, so filling the blank
     // on reveal doesn't reflow the sentence. ~1em per CJK char, min 2.5em.
-    const wordLen = [...(item.word || '')].length || 2;
+    const answerText = (clozeParts && clozeParts.answer) || item.word || '';
+    const wordLen = [...answerText].length || 2;
     // Reserve ~1em per char, but cap so long words don't overflow the line.
     const blankW = Math.min(Math.max(wordLen, 2.5), 4.5) + 'em';
     const slotStyle = { position:'relative', display:'inline-block', minWidth:blankW, textAlign:'center',
@@ -1764,7 +1777,7 @@ function StudyMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTap
                 {clozeParts.before && React.createElement(TappableSentence, { key:'b', sentence: clozeParts.before, furigana, onTapWord })}
                 <span style={slotStyle}>
                   {revealed
-                    ? <TappableKanji text={item.word} onTapKanji={onTapKanji} />
+                    ? <TappableKanji text={clozeParts.answer} onTapKanji={onTapKanji} />
                     : '\u3000'}
                   {underline}
                 </span>
@@ -1806,6 +1819,9 @@ function FormField({ label, value, setter, placeholder, hint, clearError }) {
     React.createElement('div', { style:{ fontSize:12, fontWeight:600, color:C.ink, marginBottom:4 } }, label),
     React.createElement('input', { value, onChange:e=>{ setter(e.target.value); clearError && clearError(); },
       placeholder, autoComplete:'off', autoCorrect:'off', autoCapitalize:'off', spellCheck:false,
+      name:'field-' + (label||'').replace(/[^a-z]/gi,'').toLowerCase(),
+      readOnly:true, onFocus:e=>{ e.target.removeAttribute('readonly'); },
+      'data-form-type':'other', 'data-lpignore':'true', 'data-1p-ignore':'true',
       style:{ width:'100%', padding:'10px 12px', borderRadius:8,
         border:`1px solid ${C.line}`, fontSize:16, outline:'none', background:C.card, color:C.ink, boxSizing:'border-box' } }),
     hint && React.createElement('div', { style:{ fontSize:11, color:C.muted, marginTop:3 } }, hint)
@@ -1923,11 +1939,11 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
           ? React.createElement('div', { key:i, style:{
               paddingTop: i===0?0:12, marginTop: i===0?0:12,
               borderTop: i===0?'none':`1px solid ${C.line}` } },
-              React.createElement('input', { value:editJa, onChange:e=>setEditJa(e.target.value),
+              React.createElement('input', { value:editJa, onChange:e=>setEditJa(e.target.value), autoComplete:'off', autoCorrect:'off', autoCapitalize:'off', spellCheck:false, readOnly:true, onFocus:e=>{ e.target.removeAttribute('readonly'); }, 'data-lpignore':'true', 'data-1p-ignore':'true',
                 placeholder:'Japanese sentence',
                 style:{ width:'100%', padding:'9px 11px', borderRadius:6, border:`1px solid ${C.line}`,
                   fontSize:15, outline:'none', boxSizing:'border-box', color:C.ink, background:C.card, marginBottom:8 } }),
-              React.createElement('input', { value:editEn, onChange:e=>setEditEn(e.target.value),
+              React.createElement('input', { value:editEn, onChange:e=>setEditEn(e.target.value), autoComplete:'off', autoCorrect:'off', autoCapitalize:'off', spellCheck:false, readOnly:true, onFocus:e=>{ e.target.removeAttribute('readonly'); }, 'data-lpignore':'true', 'data-1p-ignore':'true',
                 placeholder:'Translation (optional)',
                 style:{ width:'100%', padding:'9px 11px', borderRadius:6, border:`1px solid ${C.line}`,
                   fontSize:14, outline:'none', boxSizing:'border-box', color:C.ink, background:C.card, marginBottom:10 } }),
@@ -1959,11 +1975,11 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
     // Add-sentence inline form / button (edit mode only)
     !readOnly && (addingSentence
       ? React.createElement('div', { style:{ border:`1px solid ${C.line}`, borderRadius:8, padding:12, marginBottom:6 } },
-          React.createElement('input', { value:newJa, onChange:e=>setNewJa(e.target.value),
+          React.createElement('input', { value:newJa, onChange:e=>setNewJa(e.target.value), autoComplete:'off', autoCorrect:'off', autoCapitalize:'off', spellCheck:false, readOnly:true, onFocus:e=>{ e.target.removeAttribute('readonly'); }, 'data-lpignore':'true', 'data-1p-ignore':'true',
             placeholder:'Japanese sentence',
             style:{ width:'100%', padding:'9px 11px', borderRadius:6, border:`1px solid ${C.line}`,
               fontSize:15, outline:'none', boxSizing:'border-box', color:C.ink, background:C.card, marginBottom:8 } }),
-          React.createElement('input', { value:newEn, onChange:e=>setNewEn(e.target.value),
+          React.createElement('input', { value:newEn, onChange:e=>setNewEn(e.target.value), autoComplete:'off', autoCorrect:'off', autoCapitalize:'off', spellCheck:false, readOnly:true, onFocus:e=>{ e.target.removeAttribute('readonly'); }, 'data-lpignore':'true', 'data-1p-ignore':'true',
             placeholder:'Translation (optional)',
             style:{ width:'100%', padding:'9px 11px', borderRadius:6, border:`1px solid ${C.line}`,
               fontSize:14, outline:'none', boxSizing:'border-box', color:C.ink, background:C.card, marginBottom:10 } }),
