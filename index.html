@@ -2461,22 +2461,37 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
   // alpha shows あ→ん (ascending).
   const pickSort = (m) => {
     if (m === 'active') { setSortMode('active'); setActiveSortNonce(n => n + 1); return; }
-    if (sortMode === m) setSortDir(d => -d);
-    else { setSortMode(m); setSortDir((m === 'date' || m === 'progress') ? -1 : 1); }
+    if (sortMode === m) {
+      setSortDir(d => -d);
+      if (m === 'progress') setActiveSortNonce(n => n + 1); // re-freeze progress order
+    } else {
+      setSortMode(m); setSortDir((m === 'date' || m === 'progress') ? -1 : 1);
+      if (m === 'progress') setActiveSortNonce(n => n + 1);
+    }
   };
   const [filter, setFilter] = useState('all'); // all | studied | mastered | new
   // Snapshot of which words count as "active" for SORTING purposes. Re-frozen
   // when the view context changes (incl. switching sort mode), but NOT when a
   // single word is toggled - so toggling doesn't bounce the scroll.
   const sortActiveRef = React.useRef(null);
+  const sortProgressRef = React.useRef(null);
   const sortCtxRef = React.useRef('');
   const sortCtx = `${filter}|${search}|${sortMode}|${sortDir}|${activeSortNonce}`;
   const activeFirst = sortMode === 'active';
   if (sortCtxRef.current !== sortCtx || sortActiveRef.current === null) {
     sortCtxRef.current = sortCtx;
     sortActiveRef.current = new Set(activeIds || []);
+    // Snapshot each word's progress score so marking mastered / answering doesn't
+    // re-sort the list until the user re-selects Progress from the menu.
+    const snap = {};
+    (items || []).forEach(it => {
+      const p = progress[it.id] || {};
+      snap[it.id] = wordMastered(p, masteryTarget) ? (masteryTarget + 1) : (p.streak || 0);
+    });
+    sortProgressRef.current = snap;
   }
   const sortActiveSet = sortActiveRef.current;
+  const sortProgressSnap = sortProgressRef.current || {};
   const studied = items.filter(it=>{ const p=progress[it.id]||{}; return (p.correct||0)+(p.wrong||0)>0 && !wordMastered(p, masteryTarget); }).length;
   const mastered = items.filter(it=>wordMastered(progress[it.id], masteryTarget)).length;
   const unseen = items.filter(it=>!(progress[it.id]?.correct||progress[it.id]?.wrong)).length;
@@ -2549,9 +2564,8 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
       return compareReading(a, b);
     }
     if (sortMode === 'progress') {
-      const pa=progress[a.id]||{}, pb=progress[b.id]||{};
-      const sa = wordMastered(pa, masteryTarget) ? (masteryTarget+1) : (pa.streak||0);
-      const sb = wordMastered(pb, masteryTarget) ? (masteryTarget+1) : (pb.streak||0);
+      const sa = sortProgressSnap[a.id] || 0;
+      const sb = sortProgressSnap[b.id] || 0;
       if (sa!==sb) return (sa-sb)*sortDir;
       return compareReading(a, b);
     }
