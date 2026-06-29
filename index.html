@@ -2450,20 +2450,19 @@ function AddListForm({ onMerge, onClose }) {
   );
 }
 
-function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetWord, onMarkMastered, activeIds, onAddToActive, onRemoveFromActive, onAddAllToActive, onEmptyActive, masteryTarget, onTapKanji, onTapWord, onReshuffle }) {
+function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetWord, onMarkMastered, activeIds, onAddToActive, onRemoveFromActive, onAddAllToActive, onEmptyActive, masteryTarget, onTapKanji, onTapWord, onReshuffle, sortMode, setSortMode, sortDir, setSortDir, activeSortNonce, setActiveSortNonce }) {
   const [showAdd, setShowAdd] = useState(false);
   const [showAddList, setShowAddList] = useState(false);
   const [editing, setEditing] = useState(null);
   const [search, setSearch] = useState('');
-  const [sortMode, setSortMode] = useState('alpha'); // 'active' | 'alpha' | 'progress' | 'date'
-  const [sortDir, setSortDir] = useState(1); // 1 = ascending, -1 = descending (for alpha/progress/date)
-  const [activeSortNonce, setActiveSortNonce] = useState(0);
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   // Tapping a sortable mode: switch to it, or flip direction if already on it.
+  // Default direction per mode: date & progress show "most" first (descending),
+  // alpha shows あ→ん (ascending).
   const pickSort = (m) => {
     if (m === 'active') { setSortMode('active'); setActiveSortNonce(n => n + 1); return; }
     if (sortMode === m) setSortDir(d => -d);
-    else { setSortMode(m); setSortDir(m === 'date' ? -1 : 1); }
+    else { setSortMode(m); setSortDir((m === 'date' || m === 'progress') ? -1 : 1); }
   };
   const [filter, setFilter] = useState('all'); // all | studied | mastered | new
   // Snapshot of which words count as "active" for SORTING purposes. Re-frozen
@@ -2991,6 +2990,10 @@ function App() {
   const toggleColorWords = () => setColorWordsState(v => { const next = !v; try { localStorage.setItem(COLOR_WORDS_KEY, next ? 'on' : 'off'); } catch {} return next; });
   const [editWordTarget, setEditWordTarget] = useState(null); // word being edited from practice tabs
   const [welcomeId, setWelcomeId] = useState(null); // first-run: show user their Sync ID once
+  // Words-tab sort state lives here so it survives switching tabs.
+  const [wordsSortMode, setWordsSortMode] = useState('alpha');
+  const [wordsSortDir, setWordsSortDir] = useState(1);
+  const [wordsSortNonce, setWordsSortNonce] = useState(0);
   const setThemeMode = (next) => { applyTheme(next); setTheme(next); };
   const setCustomColors = (accent, base) => {
     if (accent != null) { localStorage.setItem(CUSTOM_ACCENT_KEY, accent); setCustomAccent(accent); }
@@ -3387,7 +3390,7 @@ function App() {
       mode==='study' && (deckEmpty
         ? React.createElement('div', { style:{ textAlign:'center', color:C.muted, padding:'40px 20px' } }, 'No active words. Add some in the Words tab.')
         : React.createElement(StudyMode, { items:deck, progress, idx:Math.min(deckIdx, deck.length-1), onAdvance:advanceDeck, onAnswer:handleAnswer, onCurrentWord:(id)=>{currentWordRef.current=id;}, onTapKanji:setKanjiPopup, onTapWord:setWordPopup, onEditWord:setEditWordTarget, furigana, onToggleFurigana:toggleFurigana, showStrokes, onToggleStrokes:toggleStrokes, showSentence, onToggleSentence:toggleSentence, studyTypes })),
-      mode==='words' && React.createElement(WordsMode, { items, progress, onRemove:handleRemove, onAdd:handleAdd, onEdit:handleEdit, onMerge:handleMerge, onResetWord:resetWord, onMarkMastered:markMastered, activeIds:activeIds||[], onAddToActive:addToActive, onRemoveFromActive:removeFromActive, onAddAllToActive:addAllToActive, onEmptyActive:emptyActive, masteryTarget, onTapKanji:setKanjiPopup, onTapWord:setWordPopup, onReshuffle:reshuffle }),
+      mode==='words' && React.createElement(WordsMode, { items, progress, onRemove:handleRemove, onAdd:handleAdd, onEdit:handleEdit, onMerge:handleMerge, onResetWord:resetWord, onMarkMastered:markMastered, activeIds:activeIds||[], onAddToActive:addToActive, onRemoveFromActive:removeFromActive, onAddAllToActive:addAllToActive, onEmptyActive:emptyActive, masteryTarget, onTapKanji:setKanjiPopup, onTapWord:setWordPopup, onReshuffle:reshuffle, sortMode:wordsSortMode, setSortMode:setWordsSortMode, sortDir:wordsSortDir, setSortDir:setWordsSortDir, activeSortNonce:wordsSortNonce, setActiveSortNonce:setWordsSortNonce }),
       mode==='read' && React.createElement(ReadMode, { onTapWord:setWordPopup,
         raw:readRaw, setRaw:setReadRaw, processed:readProcessed, setProcessed:setReadProcessed }),
       mode==='kanji' && React.createElement(KanjiMode, { items, onEditWord:setEditWordTarget, onPopupKanji:setKanjiPopup })
