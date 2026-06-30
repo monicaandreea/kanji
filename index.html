@@ -1269,11 +1269,13 @@ function WordPopup({ token, onClose, onAdd, existing }) {
   const [info, setInfo] = React.useState(undefined);
   const [added, setAdded] = React.useState(false);
   const [override, setOverride] = React.useState(null); // {basic, surface} when navigating to a see-also word
+  const [kanjiView, setKanjiView] = React.useState(null); // single kanji being inspected from the headword
   const activeToken = override || token;
   const lookup = activeToken ? (activeToken.basic || activeToken.surface) : null;
 
   // Reset override whenever the source token changes
-  React.useEffect(() => { setOverride(null); }, [token]);
+  React.useEffect(() => { setOverride(null); setKanjiView(null); }, [token]);
+  React.useEffect(() => { setKanjiView(null); }, [override]);
 
   React.useEffect(() => {
     if (!activeToken) return;
@@ -1340,13 +1342,42 @@ function WordPopup({ token, onClose, onAdd, existing }) {
       onClick: e => e.stopPropagation(),
       style: { background: C.paper, borderRadius: 14, padding: 22, width: '100%', maxWidth: 360,
         maxHeight: '80vh', overflowY: 'auto' }},
+      kanjiView
+        ? React.createElement(React.Fragment, null,
+            React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 } },
+              React.createElement('button', {
+                onClick: () => setKanjiView(null),
+                style: { background: 'none', border: 'none', color: C.gold, cursor: 'pointer', fontSize: 13, padding: 0 }
+              }, `← back to ${lookup}`),
+              React.createElement('button', { onClick: onClose, style: { background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: C.muted } }, '✕')
+            ),
+            React.createElement(KanjiInfoCard, { char: kanjiView }),
+            (() => {
+              const ws = (existing || []).filter(it => uniqueKanji(it.word).includes(kanjiView)).sort((a,b)=>compareReading(a,b));
+              return ws.length > 0 && React.createElement('div', { style: { marginTop: 18, borderTop: `1px solid ${C.line}`, paddingTop: 14 } },
+                React.createElement('div', { style: { fontSize: 11, color: C.muted, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 } }, `Words with ${kanjiView} (${ws.length})`),
+                React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
+                  ws.map(w => React.createElement('div', { key: w.id,
+                    style: { display: 'flex', alignItems: 'center', gap: 10, background: C.card, borderRadius: 8, padding: '8px 12px', border: `1px solid ${C.line}` }},
+                    React.createElement('div', { style: { fontSize: 20, fontWeight: 700, color: C.ink, minWidth: 40 } }, w.word),
+                    React.createElement('div', { style: { flex: 1, minWidth: 0 } },
+                      React.createElement('div', { style: { fontSize: 12, color: C.muted } }, React.createElement(KanaReading, { word: w.word, fallback: w.reading })),
+                      React.createElement('div', { style: { fontSize: 13, color: C.ink, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, w.meanings[0])
+                    )
+                  ))
+                )
+              );
+            })()
+          )
+        : React.createElement(React.Fragment, null,
       React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 } },
         React.createElement('div', null,
           override && React.createElement('button', {
             onClick: () => setOverride(null),
             style: { background: 'none', border: 'none', color: C.gold, cursor: 'pointer', fontSize: 12, padding: 0, marginBottom: 4 }
           }, `← back to ${token.basic || token.surface}`),
-          React.createElement('div', { style: { fontSize: 30, fontWeight: 700, color: C.ink, lineHeight: 1.1 } }, lookup),
+          React.createElement('div', { style: { fontSize: 30, fontWeight: 700, color: C.ink, lineHeight: 1.1 } },
+            React.createElement(TappableKanji, { text: lookup, onTapKanji: (ch) => setKanjiView(ch) })),
           reading && reading !== lookup && React.createElement('div', { style: { fontSize: 14, color: C.muted, marginTop: 2 } }, reading)
         ),
         React.createElement('button', { onClick: onClose, style: { background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: C.muted } }, '✕')
@@ -1416,6 +1447,7 @@ function WordPopup({ token, onClose, onAdd, existing }) {
         disabled: alreadyHave || added || loading,
         style: { ...btn((alreadyHave || added || loading) ? C.line : C.accent, 'white'), flex: 'unset', width: '100%', marginTop: 14 }
       }, addLabel)
+        )
     )
   );
 }
