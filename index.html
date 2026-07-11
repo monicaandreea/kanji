@@ -1104,17 +1104,38 @@ function SentenceList({ item, word, reading, showEn, onTapKanji, onTapWord, furi
   );
 }
 
+// Simple in-memory + IDB-free cache for fetched stroke SVGs (session-lived).
+const _strokeSvgCache = {};
+function StrokeGlyph({ char }) {
+  const [svg, setSvg] = React.useState(_strokeSvgCache[char] || null);
+  const [failed, setFailed] = React.useState(false);
+  React.useEffect(() => {
+    let alive = true;
+    if (_strokeSvgCache[char]) { setSvg(_strokeSvgCache[char]); return; }
+    const cp = char.codePointAt(0).toString(16).padStart(5, '0');
+    const url = `https://raw.githubusercontent.com/KanjiVG/kanjivg/master/kanji/${cp}.svg`;
+    fetch(url).then(r => r.ok ? r.text() : Promise.reject()).then(txt => {
+      // Strip the stroke-number text so we just show the stroke paths cleanly,
+      // and normalise size to fit the box.
+      let s = txt.replace(/<\?xml[^>]*\?>/, '').replace(/<!DOCTYPE[^>]*>/, '');
+      s = s.replace(/width="[^"]*"/, 'width="80"').replace(/height="[^"]*"/, 'height="80"');
+      _strokeSvgCache[char] = s;
+      if (alive) setSvg(s);
+    }).catch(() => { if (alive) setFailed(true); });
+    return () => { alive = false; };
+  }, [char]);
+  if (failed) return null;
+  return React.createElement('div', {
+    style: { width: 80, height: 80, border: `1px solid ${C.line}`, borderRadius: 6,
+      background: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+    dangerouslySetInnerHTML: svg ? { __html: svg } : undefined
+  }, svg ? undefined : '');
+}
 function StrokeOrder({ word }) {
   return React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' } },
-    [...word].map((char, i) => {
-      const cp = char.codePointAt(0).toString(16).padStart(5, '0');
-      const url = `https://raw.githubusercontent.com/KanjiVG/kanjivg/master/kanji/${cp}.svg`;
-      return React.createElement('img', {
-        key: i, src: url, width: 80, height: 80, alt: char,
-        style: { border: `1px solid ${C.line}`, borderRadius: 6, background: '#ffffff', display: 'block' },
-        onError: e => { e.target.style.display = 'none'; }
-      });
-    })
+    [...word].filter(isKanjiChar).map((char, i) =>
+      React.createElement(StrokeGlyph, { key: i, char })
+    )
   );
 }
 
