@@ -1115,10 +1115,13 @@ function StrokeGlyph({ char }) {
     const cp = char.codePointAt(0).toString(16).padStart(5, '0');
     const url = `https://raw.githubusercontent.com/KanjiVG/kanjivg/master/kanji/${cp}.svg`;
     fetch(url).then(r => r.ok ? r.text() : Promise.reject()).then(txt => {
-      // Strip the stroke-number text so we just show the stroke paths cleanly,
-      // and normalise size to fit the box.
-      let s = txt.replace(/<\?xml[^>]*\?>/, '').replace(/<!DOCTYPE[^>]*>/, '');
-      s = s.replace(/width="[^"]*"/, 'width="80"').replace(/height="[^"]*"/, 'height="80"');
+      // KanjiVG files have a multi-line XML declaration, comment, and DOCTYPE
+      // with an internal subset. Rather than strip each, just take everything
+      // from the opening <svg ...> tag onward, which drops all the header cruft.
+      const i = txt.indexOf('<svg');
+      let s = i >= 0 ? txt.slice(i) : txt;
+      s = s.replace(/<svg([^>]*)\swidth="[^"]*"/, '<svg$1').replace(/<svg([^>]*)\sheight="[^"]*"/, '<svg$1');
+      s = s.replace('<svg', '<svg width="80" height="80"');
       _strokeSvgCache[char] = s;
       if (alive) setSvg(s);
     }).catch(() => { if (alive) setFailed(true); });
