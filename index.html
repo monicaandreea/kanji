@@ -3015,7 +3015,7 @@ function ReadMode({ onTapWord, raw, setRaw, processed, setProcessed }) {
 
 // -- Kanji dictionary tab -------------------------------------------------
 function KanjiMode({ items, onTapWord, onEditWord, onPopupKanji }) {
-
+  const [search, setSearch] = useState('');
   const [selected, setSelected] = useState(null);
   const scrollRef = React.useRef(0);
 
