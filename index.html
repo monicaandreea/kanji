@@ -17,6 +17,12 @@
   body { background: #f7f4ee; font-family: 'Segoe UI', system-ui, sans-serif; min-height: 100vh; }
   ruby { ruby-align: center; }
   ruby rt { font-size: 0.6em; color: #8a8478; line-height: 1; user-select: none; }
+  /* Hide the browser's built-in clear (x) on type=search; we render our own */
+  input[type="search"]::-webkit-search-cancel-button,
+  input[type="search"]::-webkit-search-decoration { -webkit-appearance: none; appearance: none; display: none; }
+  /* Hide the browser's built-in clear "x" on search inputs (we render our own) */
+  input[type="search"]::-webkit-search-cancel-button,
+  input[type="search"]::-webkit-search-decoration { -webkit-appearance: none; appearance: none; display: none; }
   button { font-family: inherit; }
   textarea, input { font-family: inherit; }
 </style>
@@ -1625,10 +1631,11 @@ function IconBtn({ symbol, onClick, active, title, disabled, toggle }) {
 // ── Unified practice tab. Per card, picks a random ENABLED + ELIGIBLE study
 // type and renders the matching layout. studyTypes is the user's chosen list. ─
 function StudyMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTapWord, idx, onAdvance,
-    onEditWord, furigana, onToggleFurigana, showStrokes, onToggleStrokes, showSentence, onToggleSentence, studyTypes }) {
+    onEditWord, furigana, onToggleFurigana, showStrokes, onToggleStrokes, showSentence, onToggleSentence, studyTypes, pickRef }) {
   const [phase, setPhase] = useState('q');     // 'q' (question) | 'reveal'
   const [clearTrigger, setClearTrigger] = useState(0);
   const [hint, setHint] = useState(false);     // recognise mode: peek at sentence
+  const [drawMode, setDrawMode] = useState(false); // "Draw" practice screen after a reveal
 
   const safeIdx = Math.min(idx, items.length - 1);
   const item = items[safeIdx];
@@ -1646,26 +1653,30 @@ function StudyMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTap
     return list;
   })();
 
-  // Pick a type + a sentence, re-rolled whenever the word changes.
-  const pick = React.useMemo(() => {
+  // Pick a type, a sentence and the prompt meanings for this card. The result is
+  // cached in a ref owned by App, so switching tabs (which unmounts this
+  // component) doesn't re-roll a different quiz type for the same word.
+  const pickKey = item.id + '|' + ((studyTypes || []).join(','));
+  let pick = pickRef && pickRef.current;
+  if (!pick || pick.key !== pickKey) {
     const t = eligibleTypes[Math.floor(Math.random() * eligibleTypes.length)];
-    const s = hasSentence ? sentences[Math.floor(Math.random() * sentences.length)] : null;
-    return { type: t.id, sentence: s };
-  }, [item.id, studyTypes && studyTypes.join(',')]);
-  const type = pick.type;
-  const sentence = pick.sentence;
-
-  // Two random meanings for the write-from-meaning prompt.
-  const promptMeanings = React.useMemo(() => {
+    const sIdx = hasSentence ? Math.floor(Math.random() * sentences.length) : -1;
     const ms = item.meanings || [];
-    if (ms.length <= 2) return ms;
-    const pool = [...ms];
-    for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
-    return pool.slice(0, 2);
-  }, [item.id, type]);
+    let meanings = ms;
+    if (ms.length > 2) {
+      const pool = [...ms];
+      for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
+      meanings = pool.slice(0, 2);
+    }
+    pick = { key: pickKey, type: t.id, sIdx, meanings };
+    if (pickRef) pickRef.current = pick;
+  }
+  const type = pick.type;
+  const sentence = pick.sIdx >= 0 && pick.sIdx < sentences.length ? sentences[pick.sIdx] : null;
+  const promptMeanings = pick.meanings;
 
   React.useEffect(() => { onCurrentWord && onCurrentWord(item.id); }, [item.id]);
-  React.useEffect(() => { setPhase('q'); setClearTrigger(t => t + 1); setHint(false); }, [item.id]);
+  React.useEffect(() => { setPhase('q'); setClearTrigger(t => t + 1); setHint(false); setDrawMode(false); }, [item.id]);
 
   const reveal = () => setPhase('reveal');
   const grade = (correct) => {
@@ -1673,6 +1684,7 @@ function StudyMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTap
     setClearTrigger(t => t + 1);
     setPhase('q');
     setHint(false);
+    setDrawMode(false);
     onAdvance();
   };
   // Advance without counting the card as right or wrong.
@@ -1680,6 +1692,7 @@ function StudyMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTap
     setClearTrigger(t => t + 1);
     setPhase('q');
     setHint(false);
+    setDrawMode(false);
     onAdvance();
   };
 
@@ -1751,7 +1764,13 @@ function StudyMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTap
         <button onClick={() => grade(false)} style={btn(C.wrong,'white')}>✗ Wrong</button>
         <button onClick={() => grade(true)} style={btn(C.correct,'white')}>✓ Correct</button>
       </div>
-      <div onClick={skip} style={{ textAlign:'center', marginTop:12, fontSize:13, color:C.muted, cursor:'pointer' }}>Skip</div>
+      <div style={{ display:'flex', gap:18, justifyContent:'center', marginTop:12 }}>
+        <div onClick={skip} style={{ fontSize:13, color:C.muted, cursor:'pointer' }}>Skip</div>
+        {!isWrite && !drawMode && (
+          <div onClick={()=>{ setDrawMode(true); setClearTrigger(t=>t+1); }}
+            style={{ fontSize:13, color:C.accent, fontWeight:600, cursor:'pointer' }}>Draw</div>
+        )}
+      </div>
     </div>
   ) : (
     <div style={{ display:'flex', gap:10, width:'100%' }}>
@@ -1799,6 +1818,37 @@ function StudyMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTap
                 {React.createElement(SentenceList, { item, word:item.word, reading:item.reading, showEn:true, furigana, onTapKanji, onTapWord })}
               </div>
             )}
+          </div>
+        )}
+        {gradeBar}
+      </div>
+    );
+  }
+
+  // ── DRAW PRACTICE (opened from a revealed non-write card) ──────────────────
+  // One-way screen: you leave it by grading (or skipping), which advances.
+  if (drawMode) {
+    return (
+      <div style={{ display:'flex', flexDirection:'column', gap:16, alignItems:'center' }}>
+        <div style={{ textAlign:'center', width:'100%' }}>
+          <div style={{ fontSize:12, color:C.muted, textTransform:'uppercase', letterSpacing:2, marginBottom:6 }}>Practice this word</div>
+          <div style={{ fontSize:26, fontWeight:700, color:C.ink }}>
+            <TappableKanji text={item.word} onTapKanji={onTapKanji} />
+            <span style={{ fontSize:16, fontWeight:400, color:C.muted, marginLeft:8 }}>
+              <KanaReading word={item.word} fallback={item.reading} />
+            </span>
+          </div>
+          <div style={{ fontSize:14, color:C.muted, marginTop:4 }}>{item.meanings.join(', ')}</div>
+          {statLine}
+        </div>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:10, width:'100%' }}>
+          <DrawCanvas clearTrigger={clearTrigger} />
+          {writeStrip}
+        </div>
+        {showStrokes && <StrokeOrder word={item.word} />}
+        {showSentence && hasSentence && (
+          <div style={{ background:C.paperDark, borderRadius:8, padding:'12px 14px', width:'100%' }}>
+            {React.createElement(SentenceList, { item, word:item.word, reading:item.reading, showEn:true, furigana, onTapKanji, onTapWord })}
           </div>
         )}
         {gradeBar}
@@ -2506,11 +2556,10 @@ function AddListForm({ onMerge, onClose }) {
   );
 }
 
-function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetWord, onMarkMastered, activeIds, onAddToActive, onRemoveFromActive, onAddAllToActive, onEmptyActive, masteryTarget, onTapKanji, onTapWord, onReshuffle, sortMode, setSortMode, sortDir, setSortDir, activeSortNonce, setActiveSortNonce }) {
+function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetWord, onMarkMastered, activeIds, onAddToActive, onRemoveFromActive, onAddAllToActive, onEmptyActive, masteryTarget, onTapKanji, onTapWord, onReshuffle, sortMode, setSortMode, sortDir, setSortDir, activeSortNonce, setActiveSortNonce, search, setSearch, filter, setFilter }) {
   const [showAdd, setShowAdd] = useState(false);
   const [showAddList, setShowAddList] = useState(false);
   const [editing, setEditing] = useState(null);
-  const [search, setSearch] = useState('');
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   // Tapping a sortable mode: switch to it, or flip direction if already on it.
   // Default direction per mode: date & progress show "most" first (descending),
@@ -2525,7 +2574,7 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
       if (m === 'progress') setActiveSortNonce(n => n + 1);
     }
   };
-  const [filter, setFilter] = useState('all'); // all | studied | mastered | new
+  // filter/search live in App so they persist across tab switches
   // Snapshot of which words count as "active" for SORTING purposes. Re-frozen
   // when the view context changes (incl. switching sort mode), but NOT when a
   // single word is toggled - so toggling doesn't bounce the scroll.
@@ -2569,6 +2618,7 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
     if (filter==='studied' && (total===0 || isMastered)) return false;
     if (filter==='mastered' && !isMastered) return false;
     if (filter==='new' && total>0) return false;
+    if (filter==='active' && !(activeIds||[]).includes(it.id)) return false;
     // search filter
     if (!q) return true;
     // sentence-paste mode: match words that share any kanji with the query
@@ -2676,10 +2726,15 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
 
       {/* Active count (left) + actions/sort (right) */}
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:8, marginTop:-6 }}>
-        <div title="Words in your active list" style={{ fontSize:12, color:C.muted, opacity:0.7,
-          border:`1px dashed ${C.line}`, borderRadius:6, padding:'4px 9px', flexShrink:0 }}>
+        <button title="Show only your active list"
+          onClick={()=>setFilter(f => f==='active' ? 'all' : 'active')}
+          style={{ fontSize:12, cursor:'pointer', flexShrink:0, borderRadius:6, padding:'4px 9px',
+            background: filter==='active' ? C.gold : 'transparent',
+            color: filter==='active' ? bestText(C.gold) : C.muted,
+            opacity: filter==='active' ? 1 : 0.7,
+            border:`1px dashed ${filter==='active' ? C.gold : C.line}` }}>
           {(activeIds||[]).length}
-        </div>
+        </button>
         <div style={{ display:'flex', alignItems:'center', justifyContent:'flex-end', gap:8, flexWrap:'wrap' }}>
         {(() => {
           const btnStyle = { background:C.card, color:C.muted, border:`1px solid ${C.line}`, borderRadius:6,
@@ -2741,13 +2796,14 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
             ? React.createElement('div', { key:'lbl-partial', style:{ fontSize:11, color:C.muted, textTransform:'uppercase', letterSpacing:1, fontWeight:600, marginTop: i===0?0:8, marginBottom:-2 } }, 'Partial matches')
             : null;
           const row = React.createElement('div', { key:item.id,
-            style:{ display:'flex', alignItems:'center', gap:10,
+            onClick:()=>setEditing(item),
+            title:'View word',
+            style:{ display:'flex', alignItems:'center', gap:10, cursor:'pointer',
               background: isMastered ? C.softGreen : C.card,
               borderRadius:8, padding:'10px 12px',
               border:`1px solid ${inActive ? C.gold : (isMastered ? C.correct : C.line)}` }},
             React.createElement('div', { style:{ fontSize:22, fontWeight:700, color:C.ink, lineHeight:1.25,
-              wordBreak:'break-all', maxWidth:'45%', flexShrink:0 } },
-              React.createElement(TappableKanji, { text:item.word, onTapKanji })),
+              wordBreak:'break-all', maxWidth:'45%', flexShrink:0 } }, item.word),
             React.createElement('div', { style:{ flex:1, minWidth:0 } },
               React.createElement('div', { style:{ fontSize:12, color:C.muted, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' } },
                 React.createElement(KanaReading, { word:item.word, fallback:item.reading })),
@@ -2769,18 +2825,13 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
                   style:{ width:26, height:26, flexShrink:0, display:'flex', alignItems:'center',
                     justifyContent:'center', color:C.correct, fontSize:14 } }, '✓')
               : React.createElement('button', {
-                  onClick:()=> inActive ? onRemoveFromActive(item.id) : onAddToActive(item.id),
+                  onClick:(e)=>{ e.stopPropagation(); inActive ? onRemoveFromActive(item.id) : onAddToActive(item.id); },
                   title: inActive ? 'In active set (tap to remove)' : 'Add to active set',
                   style:{ background: inActive ? C.gold : 'none', border:`1px solid ${inActive ? C.gold : C.line}`,
                     color: inActive ? 'white' : C.muted, cursor:'pointer', fontSize:14,
                     width:26, height:26, borderRadius:6, flexShrink:0, lineHeight:1,
                     display:'flex', alignItems:'center', justifyContent:'center', padding:0 }
-                }, inActive ? '✓' : '+'),
-            React.createElement('button', {
-              onClick:()=>setEditing(item),
-              title:'View word',
-              style:{ background:'none', border:'none', color:C.muted, cursor:'pointer', fontSize:17, padding:'4px 4px', flexShrink:0 }
-            }, '⊙')
+                }, inActive ? '✓' : '+')
           );
           return partialHeader ? React.createElement(React.Fragment, { key:'frag-'+item.id }, partialHeader, row) : row;
         })}
@@ -2913,7 +2964,7 @@ function ReadMode({ onTapWord, raw, setRaw, processed, setProcessed }) {
 
 // -- Kanji dictionary tab -------------------------------------------------
 function KanjiMode({ items, onTapWord, onEditWord, onPopupKanji }) {
-  const [search, setSearch] = useState('');
+
   const [selected, setSelected] = useState(null);
   const scrollRef = React.useRef(0);
 
@@ -3066,7 +3117,12 @@ function App() {
   const toggleColorWords = () => setColorWordsState(v => { const next = !v; try { localStorage.setItem(COLOR_WORDS_KEY, next ? 'on' : 'off'); } catch {} return next; });
   const [editWordTarget, setEditWordTarget] = useState(null); // word being edited from practice tabs
   const [welcomeId, setWelcomeId] = useState(null); // first-run: show user their Sync ID once
-  // Words-tab sort state lives here so it survives switching tabs.
+  // Words-tab search/filter/sort live here so they survive switching tabs.
+  // Holds the current Study card's chosen quiz type / sentence / meanings so it
+  // stays the same when you leave the Study tab and come back.
+  const studyPickRef = React.useRef(null);
+  const [wordsSearch, setWordsSearch] = useState('');
+  const [wordsFilter, setWordsFilter] = useState('all'); // all | studied | mastered | new | active
   const [wordsSortMode, setWordsSortMode] = useState('alpha');
   const [wordsSortDir, setWordsSortDir] = useState(1);
   const [wordsSortNonce, setWordsSortNonce] = useState(0);
@@ -3479,8 +3535,8 @@ function App() {
     React.createElement('div', { style:{ maxWidth:420, margin:'0 auto', padding:20, minHeight:'calc(100vh - 60px)' } },
       mode==='study' && (deckEmpty
         ? React.createElement('div', { style:{ textAlign:'center', color:C.muted, padding:'40px 20px' } }, 'No active words. Add some in the Words tab.')
-        : React.createElement(StudyMode, { items:deck, progress, idx:Math.min(deckIdx, deck.length-1), onAdvance:advanceDeck, onAnswer:handleAnswer, onCurrentWord:(id)=>{currentWordRef.current=id;}, onTapKanji:setKanjiPopup, onTapWord:setWordPopup, onEditWord:setEditWordTarget, furigana, onToggleFurigana:toggleFurigana, showStrokes, onToggleStrokes:toggleStrokes, showSentence, onToggleSentence:toggleSentence, studyTypes })),
-      mode==='words' && React.createElement(WordsMode, { items, progress, onRemove:handleRemove, onAdd:handleAdd, onEdit:handleEdit, onMerge:handleMerge, onResetWord:resetWord, onMarkMastered:markMastered, activeIds:activeIds||[], onAddToActive:addToActive, onRemoveFromActive:removeFromActive, onAddAllToActive:addAllToActive, onEmptyActive:emptyActive, masteryTarget, onTapKanji:setKanjiPopup, onTapWord:setWordPopup, onReshuffle:reshuffle, sortMode:wordsSortMode, setSortMode:setWordsSortMode, sortDir:wordsSortDir, setSortDir:setWordsSortDir, activeSortNonce:wordsSortNonce, setActiveSortNonce:setWordsSortNonce }),
+        : React.createElement(StudyMode, { items:deck, progress, idx:Math.min(deckIdx, deck.length-1), onAdvance:advanceDeck, onAnswer:handleAnswer, onCurrentWord:(id)=>{currentWordRef.current=id;}, onTapKanji:setKanjiPopup, onTapWord:setWordPopup, onEditWord:setEditWordTarget, furigana, onToggleFurigana:toggleFurigana, showStrokes, onToggleStrokes:toggleStrokes, showSentence, onToggleSentence:toggleSentence, studyTypes, pickRef:studyPickRef })),
+      mode==='words' && React.createElement(WordsMode, { items, progress, onRemove:handleRemove, onAdd:handleAdd, onEdit:handleEdit, onMerge:handleMerge, onResetWord:resetWord, onMarkMastered:markMastered, activeIds:activeIds||[], onAddToActive:addToActive, onRemoveFromActive:removeFromActive, onAddAllToActive:addAllToActive, onEmptyActive:emptyActive, masteryTarget, onTapKanji:setKanjiPopup, onTapWord:setWordPopup, onReshuffle:reshuffle, sortMode:wordsSortMode, setSortMode:setWordsSortMode, sortDir:wordsSortDir, setSortDir:setWordsSortDir, activeSortNonce:wordsSortNonce, setActiveSortNonce:setWordsSortNonce, search:wordsSearch, setSearch:setWordsSearch, filter:wordsFilter, setFilter:setWordsFilter }),
       mode==='read' && React.createElement(ReadMode, { onTapWord:setWordPopup,
         raw:readRaw, setRaw:setReadRaw, processed:readProcessed, setProcessed:setReadProcessed }),
       mode==='kanji' && React.createElement(KanjiMode, { items, onEditWord:setEditWordTarget, onPopupKanji:setKanjiPopup })
