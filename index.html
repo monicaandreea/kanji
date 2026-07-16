@@ -1881,11 +1881,14 @@ function StudyMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTap
   // ── DRAW PRACTICE (opened from a revealed non-write card) ──────────────────
   // One-way screen: you leave it by grading (or skipping), which advances.
   if (drawMode) {
-    // Practice screen has its own controls: mark it wrong, or move on neutrally.
+    // Practice screen controls: grade it either way, or skip without counting.
     const practiceBar = (
-      <div style={{ display:'flex', gap:10, width:'100%' }}>
-        <button onClick={() => grade(false)} style={btn(C.wrong,'white')}>Mark as wrong</button>
-        <button onClick={skip} style={btn(C.accent,'white')}>Next {'\u2192'}</button>
+      <div style={{ width:'100%' }}>
+        <div style={{ display:'flex', gap:10, width:'100%' }}>
+          <button onClick={() => grade(false)} style={btn(C.wrong,'white')}>Mark as wrong</button>
+          <button onClick={() => grade(true)} style={btn(C.correct,'white')}>Mark as correct</button>
+        </div>
+        <div onClick={skip} style={{ textAlign:'center', marginTop:12, fontSize:13, color:C.muted, cursor:'pointer' }}>Skip</div>
       </div>
     );
     return (
