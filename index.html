@@ -1301,7 +1301,9 @@ function TappableKanji({ text, onTapKanji, style }) {
       isKanjiChar(ch)
         ? React.createElement('span', {
             key: i,
-            onClick: () => onTapKanji(ch),
+            // stopPropagation so tapping a kanji inside a clickable row (e.g. the
+            // Words list) opens the kanji entry without also opening the row.
+            onClick: (e) => { e.stopPropagation(); onTapKanji(ch); },
             style: { cursor: 'pointer', borderBottom: `1px dotted ${C.gold}` }
           }, ch)
         : React.createElement('span', { key: i }, ch)
@@ -1819,7 +1821,7 @@ function StudyMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTap
         <div onClick={skip} style={{ fontSize:13, color:C.muted, cursor:'pointer' }}>Skip</div>
         {!isWrite && !drawMode && (
           <div onClick={()=>{ setDrawMode(true); setClearTrigger(t=>t+1); }}
-            style={{ fontSize:13, color:C.accent, fontWeight:600, cursor:'pointer' }}>Draw</div>
+            style={{ fontSize:13, color:C.accent, fontWeight:600, cursor:'pointer' }}>Practice</div>
         )}
       </div>
     </div>
@@ -2861,7 +2863,8 @@ function WordsMode({ items, progress, onRemove, onAdd, onEdit, onMerge, onResetW
               borderRadius:8, padding:'10px 12px',
               border:`1px solid ${inActive ? C.gold : (isMastered ? C.correct : C.line)}` }},
             React.createElement('div', { style:{ fontSize:22, fontWeight:700, color:C.ink, lineHeight:1.25,
-              wordBreak:'break-all', maxWidth:'45%', flexShrink:0 } }, item.word),
+              wordBreak:'break-all', maxWidth:'45%', flexShrink:0 } },
+              React.createElement(TappableKanji, { text:item.word, onTapKanji })),
             React.createElement('div', { style:{ flex:1, minWidth:0 } },
               React.createElement('div', { style:{ fontSize:12, color:C.muted, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' } },
                 React.createElement(KanaReading, { word:item.word, fallback:item.reading })),
