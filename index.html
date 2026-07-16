@@ -38,6 +38,57 @@
   })();
 </script>
 <div id="root"></div>
+<script>
+  // On-screen crash reporter. If anything throws before/while the app renders,
+  // show the error on the page instead of a blank white screen.
+  (function(){
+    var shown = false;
+    function report(title, detail) {
+      if (shown) return; shown = true;
+      try {
+        var box = document.createElement('div');
+        box.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#fff;color:#111;'
+          + 'font:13px/1.5 monospace;padding:16px;overflow:auto;-webkit-user-select:text;user-select:text;';
+        var h = document.createElement('div');
+        h.style.cssText = 'font-weight:700;font-size:15px;margin-bottom:10px;color:#b00;';
+        h.textContent = 'App error: ' + title;
+        var pre = document.createElement('pre');
+        pre.style.cssText = 'white-space:pre-wrap;word-break:break-word;margin:0 0 14px;';
+        pre.textContent = detail;
+        var btn = document.createElement('button');
+        btn.textContent = 'Copy error';
+        btn.style.cssText = 'padding:10px 14px;font:inherit;border:1px solid #999;border-radius:6px;background:#eee;';
+        btn.onclick = function(){
+          try { navigator.clipboard.writeText(title + '\n\n' + detail); btn.textContent = 'Copied'; }
+          catch(e){ btn.textContent = 'Select the text above and copy'; }
+        };
+        box.appendChild(h); box.appendChild(pre); box.appendChild(btn);
+        document.body.appendChild(box);
+      } catch(e) {}
+    }
+    window.addEventListener('error', function(e){
+      var d = '';
+      if (e.error && e.error.stack) d = e.error.stack;
+      else d = (e.message || 'unknown') + '\n' + (e.filename || '') + ':' + (e.lineno || '');
+      report(e.message || 'script error', d);
+    });
+    window.addEventListener('unhandledrejection', function(e){
+      var r = e.reason;
+      report('unhandled promise rejection',
+        (r && r.stack) ? r.stack : String(r));
+    });
+    // If the app never renders anything, say so (covers silent failures).
+    setTimeout(function(){
+      var root = document.getElementById('root');
+      if (!shown && root && root.children.length === 0) {
+        report('app did not render',
+          'No error was thrown, but #root is still empty after 12s.\n'
+          + 'This usually means the page was killed (out of memory) or a script never loaded.\n'
+          + 'UA: ' + navigator.userAgent);
+      }
+    }, 12000);
+  })();
+</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
