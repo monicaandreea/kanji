@@ -3259,19 +3259,26 @@ function ReadMode({ onTapWord, raw, setRaw, processed, setProcessed,
             fontSize: 10, padding: '3px 8px', borderRadius: 999, whiteSpace: 'nowrap', flexShrink: 0 } }, openItem.topic)
         );
     return React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 12 } },
-      backLink(() => { stopEdit(); setView('library'); }),
-      header,
-      React.createElement('div', { style: { display: 'flex', justifyContent: 'center', gap: 6 } },
-        editing
-          ? smallBtn('Update', () => canUpdate && doUpdate(), canUpdate
-              ? { background: C.accent, color: bestText(C.accent), border: `1px solid ${C.accent}`, fontWeight: 600 }
-              : { color: C.line, borderColor: C.line, cursor: 'default' })
-          : smallBtn('Update', undefined, { color: C.line, borderColor: C.line, cursor: 'default' }),
-        editing
-          ? smallBtn('Cancel', stopEdit)
-          : smallBtn('Edit', startEdit, { color: C.ink }),
-        smallBtn('Delete', () => onDeleteLibrary(openItem.id), { color: C.wrong, borderColor: C.wrong })
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+        React.createElement('div', { style: { flex: 1, minWidth: 0, display: 'flex' } },
+          backLink(() => { stopEdit(); setView('library'); })),
+        React.createElement('div', { style: { display: 'flex', gap: 6, flexShrink: 0 } },
+          editing
+            ? smallBtn('Update', () => canUpdate && doUpdate(), canUpdate
+                ? { background: C.accent, color: bestText(C.accent), border: `1px solid ${C.accent}`, fontWeight: 600 }
+                : { color: C.line, borderColor: C.line, cursor: 'default' })
+            : smallBtn('Update', undefined, { color: C.line, borderColor: C.line, cursor: 'default' }),
+          editing
+            ? smallBtn('Cancel', stopEdit)
+            : smallBtn('Edit', startEdit, { color: C.ink }),
+          smallBtn('Delete', () => {
+            const r = onDeleteLibrary(openItem.id);
+            if (r && r.then) r.then(done => { if (done) { stopEdit(); setView('library'); } });
+          }, { color: C.wrong, borderColor: C.wrong })
+        ),
+        React.createElement('div', { style: { flex: 1 } })
       ),
+      header,
       editing
         ? React.createElement('textarea', { value: eText, onChange: e => setEText(e.target.value),
             style: { width: '100%', minHeight: 180, padding: 14, borderRadius: 10, border: `1px solid ${C.line}`,
@@ -3538,8 +3545,8 @@ function App() {
   };
   const updateLibrary = (id, patch) => saveLibrary(library.map(it => it.id === id ? { ...it, ...patch } : it));
   const deleteLibrary = (id) => {
-    askConfirm('Delete this saved text?', { confirmLabel: 'Delete', danger: true })
-      .then(ok => { if (ok) saveLibrary(library.filter(it => it.id !== id)); });
+    return askConfirm('Delete this saved text?', { confirmLabel: 'Delete', danger: true })
+      .then(ok => { if (!ok) return false; saveLibrary(library.filter(it => it.id !== id)); return true; });
   };
   // Load a history entry back into Read, already processed.
   const loadFromHistory = (h) => { readHistoryIdRef.current = h.id; setReadRaw(h.text); setReadProcessed(toParas(h.text)); };
