@@ -3116,10 +3116,8 @@ function ReadSaveDialog({ topics, initial, onCancel, onSave }) {
 
 function ReadMode({ onTapWord, raw, setRaw, processed, setProcessed,
     library, history, historyN, onSaveToLibrary, onUpdateLibrary, onDeleteLibrary,
-    onDeleteHistory, onClearHistory, onLoadFromHistory, onPushHistory }) {
-  const [view, setView] = useState('read');   // 'read' | 'history' | 'library' | 'item'
-  const [openId, setOpenId] = useState(null); // library item being viewed
-  const [topicFilter, setTopicFilter] = useState(null);
+    onDeleteHistory, onClearHistory, onLoadFromHistory, onPushHistory,
+    view, setView, openId, setOpenId, topicFilter, setTopicFilter }) {
   const [showSave, setShowSave] = useState(false);
   const [editing, setEditing] = useState(false);
   const [eTitle, setETitle] = useState('');
@@ -3259,25 +3257,28 @@ function ReadMode({ onTapWord, raw, setRaw, processed, setProcessed,
             fontSize: 10, padding: '3px 8px', borderRadius: 999, whiteSpace: 'nowrap', flexShrink: 0 } }, openItem.topic)
         );
     return React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 12 } },
-      React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-        React.createElement('div', { style: { flex: 1, minWidth: 0, display: 'flex' } },
-          backLink(() => { stopEdit(); setView('library'); })),
-        React.createElement('div', { style: { display: 'flex', gap: 6, flexShrink: 0 } },
-          editing
-            ? smallBtn('Update', () => canUpdate && doUpdate(), canUpdate
+      editing
+        ? React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+            React.createElement('div', { style: { flex: 1, minWidth: 0, display: 'flex' } },
+              backLink(() => { stopEdit(); setView('library'); })),
+            React.createElement('div', { style: { display: 'flex', gap: 6, flexShrink: 0 } },
+              smallBtn('Update', () => canUpdate && doUpdate(), canUpdate
                 ? { background: C.accent, color: bestText(C.accent), border: `1px solid ${C.accent}`, fontWeight: 600 }
-                : { color: C.line, borderColor: C.line, cursor: 'default' })
-            : smallBtn('Update', undefined, { color: C.line, borderColor: C.line, cursor: 'default' }),
-          editing
-            ? smallBtn('Cancel', stopEdit)
-            : smallBtn('Edit', startEdit, { color: C.ink }),
-          smallBtn('Delete', () => {
-            const r = onDeleteLibrary(openItem.id);
-            if (r && r.then) r.then(done => { if (done) { stopEdit(); setView('library'); } });
-          }, { color: C.wrong, borderColor: C.wrong })
-        ),
-        React.createElement('div', { style: { flex: 1 } })
-      ),
+                : { color: C.line, borderColor: C.line, cursor: 'default' }),
+              smallBtn('Cancel', stopEdit),
+              smallBtn('Delete', () => {
+                const r = onDeleteLibrary(openItem.id);
+                if (r && r.then) r.then(done => { if (done) { stopEdit(); setView('library'); } });
+              }, { color: C.wrong, borderColor: C.wrong })
+            ),
+            React.createElement('div', { style: { flex: 1 } })
+          )
+        : React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+            backLink(() => setView('library')),
+            React.createElement('button', { onClick: startEdit,
+              style: { background: 'none', border: 'none', color: C.muted, fontSize: 13,
+                cursor: 'pointer', padding: 0 } }, 'Edit')
+          ),
       header,
       editing
         ? React.createElement('textarea', { value: eText, onChange: e => setEText(e.target.value),
@@ -3301,6 +3302,8 @@ function ReadMode({ onTapWord, raw, setRaw, processed, setProcessed,
         onSave: (meta) => {
           const newId = onSaveToLibrary({ ...meta, text: raw.trim() });
           setShowSave(false);
+          // The text lives in the library now, so Read starts fresh behind us.
+          setRaw(''); setProcessed(null);
           if (newId) { setOpenId(newId); setEditing(false); setTopicFilter(null); setView('item'); }
         } })
     );
@@ -3500,6 +3503,11 @@ function App() {
   // The exact text most recently saved to the library. Clearing it must not put
   // it back into history, since history only holds unsaved texts.
   const savedTextRef = React.useRef(null);
+  // Read tab navigation lives here so switching tabs and coming back keeps you
+  // on the same screen (library, history, or a saved item).
+  const [readView, setReadView] = useState('read');
+  const [readOpenId, setReadOpenId] = useState(null);
+  const [readTopicFilter, setReadTopicFilter] = useState(null);
   const setHistoryN = (n) => { setHistoryNState(n); try { localStorage.setItem(HISTORY_N_KEY, String(n)); } catch {}
     setHistory(prev => { const next = prev.slice(0, n); storageSet(HISTORY_KEY, next); return next; }); };
   const setHistoryMode = (m) => { setHistoryModeState(m); try { localStorage.setItem(HISTORY_MODE_KEY, m); } catch {} };
@@ -3980,7 +3988,9 @@ function App() {
         library, history, historyN,
         onSaveToLibrary:saveToLibrary, onUpdateLibrary:updateLibrary, onDeleteLibrary:deleteLibrary,
         onDeleteHistory:deleteHistory, onClearHistory:clearHistory,
-        onLoadFromHistory:loadFromHistory, onPushHistory:pushHistory }),
+        onLoadFromHistory:loadFromHistory, onPushHistory:pushHistory,
+        view:readView, setView:setReadView, openId:readOpenId, setOpenId:setReadOpenId,
+        topicFilter:readTopicFilter, setTopicFilter:setReadTopicFilter }),
       mode==='kanji' && React.createElement(KanjiMode, { items, onEditWord:setEditWordTarget, onPopupKanji:setKanjiPopup })
     ),
     (mode==='words' || mode==='read' || mode==='kanji') && React.createElement(BackToTop, null)
