@@ -3232,13 +3232,13 @@ function ReadMode({ onTapWord, raw, setRaw, processed, setProcessed,
           React.createElement('input', { value: eTitle, onChange: e => setETitle(e.target.value),
             autoComplete: 'off', spellCheck: false,
             style: { flex: '1 1 auto', minWidth: 0, fontSize: 15, fontWeight: 600, color: C.ink,
-              background: C.card, border: `1px solid ${C.gold}`, borderRadius: 6, padding: '4px 8px',
+              background: C.card, border: `1px solid ${C.line}`, borderRadius: 6, padding: '6px 8px',
               outline: 'none', boxSizing: 'border-box' } }),
           React.createElement('select', { value: eTopic, onChange: e => setETopic(e.target.value),
-            style: { flex: '0 0 auto', width: 104, fontSize: 11, color: C.ink, background: C.card,
-              border: `1px solid ${C.gold}`, borderRadius: 999, padding: '4px 6px', outline: 'none' } },
+            style: { flex: '0 0 auto', maxWidth: 130, fontSize: 12, color: C.ink, background: C.card,
+              border: `1px solid ${C.line}`, borderRadius: 6, padding: '6px 8px', outline: 'none' } },
             topics.map(t => React.createElement('option', { key: t.name, value: t.name }, t.name)),
-            React.createElement('option', { value: '__new__' }, '+ New...')
+            React.createElement('option', { value: '__new__' }, '+ New topic...')
           )
         )
       : React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 } },
@@ -3246,12 +3246,13 @@ function ReadMode({ onTapWord, raw, setRaw, processed, setProcessed,
           openItem.topic && React.createElement('span', { style: { background: C.paperDark, color: C.ink,
             fontSize: 10, padding: '3px 8px', borderRadius: 999, whiteSpace: 'nowrap', flexShrink: 0 } }, openItem.topic)
         );
-    return React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 12 } },
+    return React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 12,
+      ...(editing ? { minHeight: 'calc(100vh - 100px)' } : {}) } },
       backLink(() => { setEditing(false); setView('library'); }),
       header,
       creating && React.createElement('input', { value: eNewTopic, onChange: e => setENewTopic(e.target.value),
         placeholder: 'New topic name', autoComplete: 'off',
-        style: { width: '100%', padding: '7px 10px', borderRadius: 8, border: `1px solid ${C.gold}`,
+        style: { width: '100%', padding: '7px 10px', borderRadius: 8, border: `1px solid ${C.line}`,
           fontSize: 13, outline: 'none', boxSizing: 'border-box', background: C.card, color: C.ink } }),
       React.createElement('div', { style: { display: 'flex', justifyContent: 'center', gap: 6 } },
         editing
@@ -3266,8 +3267,8 @@ function ReadMode({ onTapWord, raw, setRaw, processed, setProcessed,
       ),
       editing
         ? React.createElement('textarea', { value: eText, onChange: e => setEText(e.target.value),
-            style: { width: '100%', minHeight: 180, padding: 14, borderRadius: 10, border: `1px solid ${C.gold}`,
-              fontSize: 16, lineHeight: 1.7, resize: 'vertical', outline: 'none', boxSizing: 'border-box',
+            style: { flex: 1, width: '100%', minHeight: 180, padding: 14, borderRadius: 10, border: `1px solid ${C.line}`,
+              fontSize: 16, lineHeight: 1.7, resize: 'none', outline: 'none', boxSizing: 'border-box',
               background: C.card, color: C.ink } })
         : React.createElement(ProcessedText, { paras: toParas(openItem.text), onTapWord })
     );
@@ -3288,21 +3289,23 @@ function ReadMode({ onTapWord, raw, setRaw, processed, setProcessed,
   }
 
   // -- Read: input -------------------------------------------------------
-  return React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
+  // Fills the viewport so Process / History / Library sit at the bottom.
+  return React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 14,
+    minHeight: 'calc(100vh - 100px)' } },
     React.createElement('div', { style: { fontSize: 13, color: C.muted, lineHeight: 1.5, minHeight: 32,
-      display: 'flex', alignItems: 'center' } }, 'Paste any Japanese text below.'),
+      display: 'flex', alignItems: 'center', flexShrink: 0 } }, 'Paste any Japanese text below.'),
     React.createElement('textarea', {
       value: raw, onChange: e => setRaw(e.target.value),
       placeholder: '日本語をここに貼り付け…',
-      style: { width: '100%', minHeight: 180, padding: 14, borderRadius: 10,
-        border: `1px solid ${C.line}`, fontSize: 16, lineHeight: 1.7, resize: 'vertical',
+      style: { flex: 1, width: '100%', minHeight: 180, padding: 14, borderRadius: 10,
+        border: `1px solid ${C.line}`, fontSize: 16, lineHeight: 1.7, resize: 'none',
         outline: 'none', boxSizing: 'border-box', background: C.card, color: C.ink }
     }),
     React.createElement('button', {
       onClick: process, disabled: !raw.trim(),
-      style: { ...btn(raw.trim() ? C.accent : C.line, 'white'), flex: 'unset', width: '100%' }
+      style: { ...btn(raw.trim() ? C.accent : C.line, 'white'), flex: 'unset', width: '100%', flexShrink: 0 }
     }, 'Process'),
-    React.createElement('div', { style: { display: 'flex', gap: 18, justifyContent: 'center' } },
+    React.createElement('div', { style: { display: 'flex', gap: 18, justifyContent: 'center', flexShrink: 0 } },
       React.createElement('div', { onClick: () => setView('history'),
         style: { fontSize: 13, color: C.muted, cursor: 'pointer' } }, 'History'),
       React.createElement('div', { onClick: () => { setTopicFilter(null); setView('library'); },
@@ -3478,6 +3481,9 @@ function App() {
   // Id of the history entry the current Read text came from, so editing then
   // clearing updates that same entry instead of piling up new ones.
   const readHistoryIdRef = React.useRef(null);
+  // The exact text most recently saved to the library. Clearing it must not put
+  // it back into history, since history only holds unsaved texts.
+  const savedTextRef = React.useRef(null);
   const setHistoryN = (n) => { setHistoryNState(n); try { localStorage.setItem(HISTORY_N_KEY, String(n)); } catch {}
     setHistory(prev => { const next = prev.slice(0, n); storageSet(HISTORY_KEY, next); return next; }); };
   const setHistoryMode = (m) => { setHistoryModeState(m); try { localStorage.setItem(HISTORY_MODE_KEY, m); } catch {} };
@@ -3488,6 +3494,8 @@ function App() {
   const pushHistory = (text) => {
     const t = (text || '').trim();
     if (!historyKeeps(t, historyMode)) return;
+    // Already saved to the library: history only holds unsaved texts.
+    if (savedTextRef.current && t === savedTextRef.current) { savedTextRef.current = null; return; }
     const id = readHistoryIdRef.current;
     setHistory(prev => {
       let next;
@@ -3515,6 +3523,7 @@ function App() {
     saveLibrary([{ id: `L-${Date.now()}`, ts: Date.now(), ...entry }, ...library]);
     if (id) deleteHistory(id);
     readHistoryIdRef.current = null;
+    savedTextRef.current = (entry.text || '').trim();
   };
   const updateLibrary = (id, patch) => saveLibrary(library.map(it => it.id === id ? { ...it, ...patch } : it));
   const deleteLibrary = (id) => {
