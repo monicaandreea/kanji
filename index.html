@@ -2497,46 +2497,6 @@ function AccountScreen({ onClose, onReset, onLogout, onExport, onDeleteAll, sess
 
     React.createElement('div', { style: { height: 1, background: C.line, marginBottom: 24 } }),
 
-    React.createElement('div', { style: { fontSize: 14, color: C.ink, fontWeight: 600, marginBottom: 8 } }, 'Texts to keep'),
-    React.createElement('div', { style: { color: C.muted, fontSize: 13, marginBottom: 12, lineHeight: 1.6 } },
-      'How many unsaved texts your reading history holds. The oldest drops off when it is full.'),
-    React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 10 } },
-      [5, 10, 20, 50].map(n =>
-        React.createElement('button', { key: n,
-          onClick: () => { setHistoryInput(String(n)); onSetHistoryN(n); },
-          style: { flex: 1, padding: '10px', borderRadius: 8,
-            border: `2px solid ${historyN === n ? C.accent : C.line}`,
-            background: historyN === n ? C.accent : C.card,
-            color: historyN === n ? 'white' : C.ink,
-            fontWeight: 600, cursor: 'pointer', fontSize: 14 } }, n)
-      )
-    ),
-    React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 28 } },
-      React.createElement('input', { type: 'number', value: historyInput, min: 1, max: 200,
-        onChange: e => setHistoryInput(e.target.value), placeholder: 'Custom…',
-        autoComplete: 'off', readOnly: true, onFocus: e => { e.target.removeAttribute('readonly'); },
-        style: { flex: 1, padding: '10px 14px', borderRadius: 8, border: `1px solid ${C.line}`,
-          fontSize: 14, outline: 'none', boxSizing: 'border-box', color: C.ink, background: C.card } }),
-      React.createElement('button', {
-        onClick: () => { const n = parseInt(historyInput, 10); if (Number.isFinite(n) && n > 0) onSetHistoryN(n); },
-        style: { ...btn(C.accent, 'white'), flex: 'unset', padding: '10px 18px' } }, 'Set')
-    ),
-
-    React.createElement('div', { style: { fontSize: 14, color: C.ink, fontWeight: 600, marginBottom: 8 } }, 'What goes in history'),
-    React.createElement('div', { style: { color: C.muted, fontSize: 13, marginBottom: 12, lineHeight: 1.6 } },
-      'Texts are kept when you clear them, and leave history once you save them to your library.'),
-    React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 28 } },
-      [['all', 'Every text you process'], ['long', `Only texts over ${HISTORY_MIN_LEN} characters`], ['off', 'Do not keep history']]
-        .map(([id, label]) => {
-          const on = historyMode === id;
-          return React.createElement('button', { key: id, onClick: () => onSetHistoryMode(id),
-            style: { width: '100%', textAlign: 'left', padding: '11px 13px', borderRadius: 8,
-              border: `2px solid ${on ? C.accent : C.line}`, background: on ? C.accent : C.card,
-              color: on ? bestText(C.accent) : C.ink, fontSize: 13, fontWeight: on ? 600 : 400,
-              cursor: 'pointer' } }, label);
-        })
-    ),
-
     React.createElement('div', { style: { height: 1, background: C.line, marginBottom: 24 } }),
 
     React.createElement('div', { style: { fontSize: 14, color: C.ink, fontWeight: 600, marginBottom: 8 } }, 'Words per session'),
@@ -2593,6 +2553,46 @@ function AccountScreen({ onClose, onReset, onLogout, onExport, onDeleteAll, sess
         onClick: () => { const n = parseInt(masteryInput, 10); if (Number.isFinite(n) && n > 0) onMasteryTarget(n); },
         style: { ...btn(C.accent, 'white'), flex: 'unset', padding: '10px 18px' } }, 'Set')
     ),
+
+    React.createElement('div', { style: { fontSize: 14, color: C.ink, fontWeight: 600, marginBottom: 8 } }, 'History configuration'),
+    React.createElement('div', { style: { color: C.muted, fontSize: 13, marginBottom: 12, lineHeight: 1.6 } },
+      'How many texts your history holds.'),
+    React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 10 } },
+      [5, 10, 20, 50].map(n =>
+        React.createElement('button', { key: n,
+          onClick: () => { setHistoryInput(String(n)); onSetHistoryN(n); },
+          style: { flex: 1, padding: '10px', borderRadius: 8,
+            border: `2px solid ${historyN === n ? C.accent : C.line}`,
+            background: historyN === n ? C.accent : C.card,
+            color: historyN === n ? 'white' : C.ink,
+            fontWeight: 600, cursor: 'pointer', fontSize: 14 } }, n)
+      )
+    ),
+    React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 18 } },
+      React.createElement('input', { type: 'number', value: historyInput, min: 1, max: 200,
+        onChange: e => setHistoryInput(e.target.value), placeholder: 'Custom…',
+        autoComplete: 'off', readOnly: true, onFocus: e => { e.target.removeAttribute('readonly'); },
+        style: { flex: 1, padding: '10px 14px', borderRadius: 8, border: `1px solid ${C.line}`,
+          fontSize: 14, outline: 'none', boxSizing: 'border-box', color: C.ink, background: C.card } }),
+      React.createElement('button', {
+        onClick: () => { const n = parseInt(historyInput, 10); if (Number.isFinite(n) && n > 0) onSetHistoryN(n); },
+        style: { ...btn(C.accent, 'white'), flex: 'unset', padding: '10px 18px' } }, 'Set')
+    ),
+    React.createElement('div', { style: { color: C.muted, fontSize: 13, marginBottom: 12, lineHeight: 1.6 } },
+      'What kind of texts are kept in history. Or no history, if you feel adventurous.'),
+    React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 28 } },
+      [['all', 'Every text you process'], ['long', `Only texts over ${HISTORY_MIN_LEN} characters`], ['off', 'Do not keep history']]
+        .map(([id, label]) => {
+          const on = historyMode === id;
+          return React.createElement('button', { key: id, onClick: () => onSetHistoryMode(id),
+            style: { width: '100%', textAlign: 'left', padding: '11px 13px', borderRadius: 8,
+              border: `2px solid ${on ? C.accent : C.line}`, background: on ? C.accent : C.card,
+              color: on ? bestText(C.accent) : C.ink, fontSize: 13, fontWeight: on ? 600 : 400,
+              cursor: 'pointer' } }, label);
+        })
+    ),
+
+    React.createElement('div', { style: { height: 1, background: C.line, marginBottom: 24 } }),
 
     React.createElement('div', { style: { height: 1, background: C.line, marginBottom: 24 } }),
     syncBlock,
@@ -3081,7 +3081,7 @@ function ProcessedText({ paras, onTapWord }) {
 
 function ReadSaveDialog({ topics, initial, onCancel, onSave }) {
   const [title, setTitle] = useState((initial && initial.title) || '');
-  const [topic, setTopic] = useState((initial && initial.topic) || (topics[0] ? topics[0].name : ''));
+  const [topic, setTopic] = useState((initial && initial.topic) || (topics[0] ? topics[0].name : '__new__'));
   const [newTopic, setNewTopic] = useState('');
   const creating = topic === '__new__';
   const finalTopic = creating ? newTopic.trim() : topic;
@@ -3156,7 +3156,7 @@ function ReadMode({ onTapWord, raw, setRaw, processed, setProcessed,
         'Unsaved texts. Tap one to load it back.'),
       history.length === 0
         ? React.createElement('div', { style: { textAlign: 'center', color: C.muted, padding: '30px 20px', fontSize: 13 } },
-            'Nothing here yet. Texts land here when you clear them.')
+            'Nothing here yet.')
         : React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
             history.map(h => React.createElement('div', { key: h.id,
               onClick: () => { onLoadFromHistory(h); setView('read'); },
@@ -3194,7 +3194,7 @@ function ReadMode({ onTapWord, raw, setRaw, processed, setProcessed,
       ),
       shown.length === 0
         ? React.createElement('div', { style: { textAlign: 'center', color: C.muted, padding: '30px 20px', fontSize: 13 } },
-            library.length === 0 ? 'No saved texts yet. Process a text and tap Save.' : 'Nothing in this topic.')
+            'Nothing here yet.')
         : React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
             shown.map(it => React.createElement('div', { key: it.id,
               onClick: () => { setOpenId(it.id); setEditing(false); setView('item'); },
@@ -3216,7 +3216,7 @@ function ReadMode({ onTapWord, raw, setRaw, processed, setProcessed,
   // -- A saved item (read, or edit in place) -----------------------------
   if (view === 'item' && openItem) {
     const startEdit = () => {
-      setETitle(openItem.title); setETopic(openItem.topic || ''); setEText(openItem.text);
+      setETitle(openItem.title); setETopic(openItem.topic || (topics[0] ? topics[0].name : '__new__')); setEText(openItem.text);
       setENewTopic(''); setEditing(true);
     };
     const creating = eTopic === '__new__';
@@ -3521,8 +3521,8 @@ function App() {
     askConfirm('Delete this saved text?', { confirmLabel: 'Delete', danger: true })
       .then(ok => { if (ok) saveLibrary(library.filter(it => it.id !== id)); });
   };
-  // Load a history entry back into the Read input.
-  const loadFromHistory = (h) => { readHistoryIdRef.current = h.id; setReadRaw(h.text); setReadProcessed(null); };
+  // Load a history entry back into Read, already processed.
+  const loadFromHistory = (h) => { readHistoryIdRef.current = h.id; setReadRaw(h.text); setReadProcessed(toParas(h.text)); };
   const [wordsSearch, setWordsSearch] = useState('');
   const [wordsFilter, setWordsFilter] = useState('all'); // all | studied | mastered | new | active
   const [wordsSortMode, setWordsSortMode] = useState('alpha');
