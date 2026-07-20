@@ -1714,7 +1714,7 @@ function IconBtn({ symbol, onClick, active, title, disabled, toggle }) {
 // ── Unified practice tab. Per card, picks a random ENABLED + ELIGIBLE study
 // type and renders the matching layout. studyTypes is the user's chosen list. ─
 function StudyMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTapWord, idx, onAdvance,
-    onEditWord, furigana, onToggleFurigana, showStrokes, onToggleStrokes, showSentence, onToggleSentence, studyTypes, pickRef, reviewItem, onAddToStudying, onContinueReview }) {
+    onEditWord, furigana, onToggleFurigana, showStrokes, onToggleStrokes, showSentence, onToggleSentence, studyTypes, pickRef, isReview, onAddToStudying, onContinueReview }) {
   const [phase, setPhase] = useState('q');     // 'q' (question) | 'reveal'
   const [clearTrigger, setClearTrigger] = useState(0);
   const [hint, setHint] = useState(false);     // recognise mode: peek at sentence
@@ -1741,7 +1741,7 @@ function StudyMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTap
   // component) doesn't re-roll a different quiz type for the same word.
   const pickKey = item.id + '|' + ((studyTypes || []).join(','));
   let pick = pickRef && pickRef.current;
-  if (!pick || pick.key !== pickKey) {
+  if (isReview || !pick || pick.key !== pickKey) {
     const t = eligibleTypes[Math.floor(Math.random() * eligibleTypes.length)];
     const sIdx = hasSentence ? Math.floor(Math.random() * sentences.length) : -1;
     const ms = item.meanings || [];
@@ -1752,7 +1752,7 @@ function StudyMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTap
       meanings = pool.slice(0, 2);
     }
     pick = { key: pickKey, type: t.id, sIdx, meanings };
-    if (pickRef) pickRef.current = pick;
+    if (pickRef && !isReview) pickRef.current = pick;
   }
   const type = pick.type;
   const sentence = pick.sIdx >= 0 && pick.sIdx < sentences.length ? sentences[pick.sIdx] : null;
@@ -1760,29 +1760,6 @@ function StudyMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTap
 
   React.useEffect(() => { onCurrentWord && onCurrentWord(item.id); }, [item.id]);
   React.useEffect(() => { setPhase('q'); setClearTrigger(t => t + 1); setHint(false); setDrawMode(false); }, [item.id]);
-
-  // Mastered-word review card: shows the word with its meaning, and offers to
-  // add it back to studying or continue. No grading; it never affects streaks.
-  if (reviewItem) {
-    const rSents = getSentences(reviewItem);
-    return React.createElement('div', { style:{ display:'flex', flexDirection:'column', gap:16, alignItems:'center' } },
-      React.createElement('div', { style:{ fontSize:12, color:C.gold, textTransform:'uppercase', letterSpacing:2, fontWeight:600 } }, 'Mastered word review'),
-      React.createElement('div', { style:{ textAlign:'center' } },
-        React.createElement('div', { style:{ fontSize:34, fontWeight:700, color:C.ink, lineHeight:1.2 } },
-          React.createElement(TappableKanji, { text:reviewItem.word, onTapKanji })),
-        React.createElement('div', { style:{ fontSize:16, color:C.muted, marginTop:4 } },
-          React.createElement(KanaReading, { word:reviewItem.word, fallback:reviewItem.reading })),
-        React.createElement('div', { style:{ fontSize:15, color:C.ink, marginTop:8 } }, reviewItem.meanings.join(', '))
-      ),
-      showStrokes && React.createElement(StrokeOrder, { word:reviewItem.word }),
-      rSents.length > 0 && React.createElement('div', { style:{ background:C.paperDark, borderRadius:8, padding:'12px 14px', width:'100%' } },
-        React.createElement(SentenceList, { item:reviewItem, word:reviewItem.word, reading:reviewItem.reading, showEn:true, furigana, onTapKanji, onTapWord })),
-      React.createElement('div', { style:{ display:'flex', gap:10, width:'100%' } },
-        React.createElement('button', { onClick:()=>onAddToStudying(reviewItem.id), style:btn(C.gold,'white') }, 'Add to studying'),
-        React.createElement('button', { onClick:onContinueReview, style:btn(C.accent,'white') }, 'Continue')
-      )
-    );
-  }
 
   const reveal = () => setPhase('reveal');
   const grade = (correct) => {
@@ -1865,6 +1842,12 @@ function StudyMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTap
   );
 
   const gradeBar = revealed ? (
+    isReview ? (
+      <div style={{ display:'flex', gap:10, width:'100%' }}>
+        <button onClick={onAddToStudying} style={btn(C.gold,'white')}>Add to studying</button>
+        <button onClick={onContinueReview} style={btn(C.accent,'white')}>Continue</button>
+      </div>
+    ) : (
     <div style={{ width:'100%' }}>
       <div style={{ display:'flex', gap:10, width:'100%' }}>
         <button onClick={() => grade(false)} style={btn(C.wrong,'white')}>✗ Wrong</button>
@@ -1878,6 +1861,7 @@ function StudyMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTap
         )}
       </div>
     </div>
+    )
   ) : (
     <div style={{ display:'flex', gap:10, width:'100%' }}>
       <button onClick={reveal} style={{ ...btn(C.accent,'white'), width:'100%' }}>Reveal</button>
@@ -2317,21 +2301,27 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
           )
         )
       : React.createElement('button', { onClick:()=>setAddingSentence(true),
-          style:{ ...btn(C.card, C.accent), border:`1px dashed ${C.accent}`, padding:'9px 12px', width:'100%' } }, '+ Add sentence')),
-    // Look for more examples online (Tatoeba). Styled as a plain text link.
-    !readOnly && word.trim() && React.createElement('div', {
-      onClick: () => setFindingExamples(true),
-      style: { textAlign:'center', marginTop:10, fontSize:13, color:C.accent, fontWeight:600, cursor:'pointer' } },
-      'Look for examples'),
-    !readOnly && findingExamples && React.createElement(ExampleFinder, {
-      word: word.trim(), existingSentences: localSentences,
-      onAdd: (s) => setLocalSentences(prev => [...prev, { ja: s.ja, en: s.en || null }]),
-      onClose: () => setFindingExamples(false)
-    })
+          style:{ ...btn(C.card, C.accent), border:`1px dashed ${C.accent}`, padding:'9px 12px', width:'100%' } }, '+ Add sentence'))
   );
 
   // View mode: sentences are read-only. Edit form: full add/remove controls.
-  const viewBody = isEdit && renderSentences(true);
+  const viewBody = isEdit && React.createElement(React.Fragment, null,
+    renderSentences(true),
+    React.createElement('div', {
+      onClick: () => setFindingExamples(true),
+      style: { textAlign:'center', marginTop:12, fontSize:13, color:C.accent, fontWeight:600, cursor:'pointer' } },
+      'Look for examples'),
+    findingExamples && React.createElement(ExampleFinder, {
+      word: (editItem.word || '').trim(), existingSentences: localSentences,
+      onAdd: (s) => {
+        if (localSentences.some(x => x.ja === s.ja)) return;
+        const next = [...localSentences, { ja: s.ja, en: s.en || null }];
+        setLocalSentences(next);
+        saveSentences(next);
+      },
+      onClose: () => setFindingExamples(false)
+    })
+  );
 
   // Editable form body
   const formBody = React.createElement(React.Fragment, null,
@@ -3150,13 +3140,14 @@ function shuffle(arr) {
 // -- Read tab - paste text, get furigana + tappable words ----------------
 // State (raw/processed) lives in App so it persists across tab switches.
 // Split pasted text into paragraphs, exactly as Process has always done.
-// Fetch up to `limit` example sentences (JA + EN) for a word from Tatoeba's
-// public API. Runs in the user's browser; returns [] on any failure so the UI
-// can show a graceful "couldn't load" message rather than breaking.
+// Cloudflare Worker that proxies Tatoeba with CORS headers. Set this to your
+// deployed Worker URL. Until then, the fetch will fail gracefully.
+const TATOEBA_PROXY = "https://kanji-tatoeba.girbeamonica.workers.dev";
+// Fetch up to `limit` example sentences (JA + EN) for a word via the proxy.
+// Returns { ok, sentences } and never throws.
 async function fetchTatoebaExamples(word, limit) {
   limit = limit || 20;
-  const q = encodeURIComponent(word);
-  const url = `https://tatoeba.org/en/api_v0/search?from=jpn&to=eng&query=${q}&trans_filter=limit&trans_to=eng&sort=relevance`;
+  const url = `${TATOEBA_PROXY}?q=${encodeURIComponent(word)}`;
   try {
     const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
     if (!res.ok) return { ok: false, sentences: [] };
@@ -4159,7 +4150,7 @@ function App() {
     React.createElement('div', { style:{ maxWidth:420, margin:'0 auto', padding:20, minHeight:'calc(100vh - 60px)' } },
       mode==='study' && (deckEmpty
         ? React.createElement('div', { style:{ textAlign:'center', color:C.muted, padding:'40px 20px' } }, 'No active words. Add some in the Words tab.')
-        : React.createElement(StudyMode, { items:deck, progress, idx:Math.min(deckIdx, deck.length-1), onAdvance:advanceDeck, onAnswer:handleAnswer, onCurrentWord:(id)=>{currentWordRef.current=id;}, onTapKanji:setKanjiPopup, onTapWord:setWordPopup, onEditWord:setEditWordTarget, furigana, onToggleFurigana:toggleFurigana, showStrokes, onToggleStrokes:toggleStrokes, showSentence, onToggleSentence:toggleSentence, studyTypes, pickRef:studyPickRef, reviewItem, onAddToStudying:addToStudying, onContinueReview:continueReview })),
+        : React.createElement(StudyMode, { items: reviewItem ? [reviewItem] : deck, progress, idx: reviewItem ? 0 : Math.min(deckIdx, deck.length-1), onAdvance:advanceDeck, onAnswer:handleAnswer, onCurrentWord:(id)=>{currentWordRef.current=id;}, onTapKanji:setKanjiPopup, onTapWord:setWordPopup, onEditWord:setEditWordTarget, furigana, onToggleFurigana:toggleFurigana, showStrokes, onToggleStrokes:toggleStrokes, showSentence, onToggleSentence:toggleSentence, studyTypes, pickRef:studyPickRef, isReview: !!reviewItem, onAddToStudying:()=>addToStudying(reviewItem.id), onContinueReview:continueReview })),
       mode==='words' && React.createElement(WordsMode, { items, progress, onRemove:handleRemove, onAdd:handleAdd, onEdit:handleEdit, onMerge:handleMerge, onResetWord:resetWord, onMarkMastered:markMastered, activeIds:activeIds||[], onAddToActive:addToActive, onRemoveFromActive:removeFromActive, onAddAllToActive:addAllToActive, onEmptyActive:emptyActive, masteryTarget, onTapKanji:setKanjiPopup, onTapWord:setWordPopup, onReshuffle:reshuffle, sortMode:wordsSortMode, setSortMode:setWordsSortMode, sortDir:wordsSortDir, setSortDir:setWordsSortDir, activeSortNonce:wordsSortNonce, setActiveSortNonce:setWordsSortNonce, search:wordsSearch, setSearch:setWordsSearch, filter:wordsFilter, setFilter:setWordsFilter }),
       mode==='read' && React.createElement(ReadMode, { onTapWord:setWordPopup,
         raw:readRaw, setRaw:setReadRaw, processed:readProcessed, setProcessed:setReadProcessed,
