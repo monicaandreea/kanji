@@ -3625,6 +3625,7 @@ function App() {
   });
   const [colorWords, setColorWordsState] = useState(() => localStorage.getItem(COLOR_WORDS_KEY) === 'on');
   const [reviewMastered, setReviewMasteredState] = useState(() => localStorage.getItem(REVIEW_MASTERED_KEY) === 'on');
+  const [reviewId, setReviewId] = useState(null); // mastered word currently surfaced for review
   const toggleReviewMastered = () => setReviewMasteredState(v => { const next = !v; try { localStorage.setItem(REVIEW_MASTERED_KEY, next ? 'on' : 'off'); } catch {} return next; });
   const toggleColorWords = () => setColorWordsState(v => { const next = !v; try { localStorage.setItem(COLOR_WORDS_KEY, next ? 'on' : 'off'); } catch {} return next; });
   const [editWordTarget, setEditWordTarget] = useState(null); // word being edited from practice tabs
@@ -4080,7 +4081,6 @@ function App() {
   const deckEmpty = deck.length === 0;
 
   // Occasionally resurface a mastered word for review (oldest-mastered first).
-  const [reviewId, setReviewId] = useState(null);
   const pickReviewId = () => {
     const mastered = items.filter(it => wordMastered(progress[it.id], masteryTarget));
     if (!mastered.length) return null;
