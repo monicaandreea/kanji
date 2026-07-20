@@ -1294,7 +1294,7 @@ function KanjiPopup({ char, onClose, items }) {
     .sort((a, b) => compareReading(a, b));
   return React.createElement('div', {
     onClick: onClose,
-    style: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 200,
+    style: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 310,
       display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }},
     React.createElement('div', {
       onClick: e => e.stopPropagation(),
@@ -1449,7 +1449,7 @@ function WordPopup({ token, onClose, onAdd, existing }) {
 
   return React.createElement('div', {
     onClick: onClose,
-    style: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 210,
+    style: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 320,
       display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }},
     React.createElement('div', {
       onClick: e => e.stopPropagation(),
@@ -2086,7 +2086,7 @@ function FormField({ label, value, setter, placeholder, hint, clearError }) {
 
 // "Look for examples": fetches sentences from Tatoeba and lets you add any to
 // the word's own sentence list. Excludes sentences already on the word.
-function ExampleFinder({ word, existingSentences, onAdd, onClose }) {
+function ExampleFinder({ word, existingSentences, onAdd, onClose, onTapWord }) {
   const [state, setState] = React.useState('loading'); // loading | done | error | empty
   const [results, setResults] = React.useState([]);
   const [added, setAdded] = React.useState({}); // index -> true
@@ -2122,7 +2122,10 @@ function ExampleFinder({ word, existingSentences, onAdd, onClose }) {
           style: { display: 'flex', alignItems: 'flex-start', gap: 10, background: C.card,
             border: `1px solid ${C.line}`, borderRadius: 8, padding: '10px 12px' } },
           React.createElement('div', { style: { flex: 1, minWidth: 0 } },
-            React.createElement('div', { style: { fontSize: 15, color: C.ink, lineHeight: 1.7 } }, s.ja),
+            React.createElement('div', { style: { fontSize: 16, color: C.ink, lineHeight: 2 } },
+              onTapWord
+                ? React.createElement(TappableSentence, { sentence: s.ja, onTapWord })
+                : s.ja),
             s.en && React.createElement('div', { style: { fontSize: 12, color: C.muted, marginTop: 4, lineHeight: 1.5 } }, s.en)
           ),
           React.createElement('button', {
@@ -2312,7 +2315,7 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
       style: { textAlign:'center', marginTop:12, fontSize:13, color:C.accent, fontWeight:600, cursor:'pointer' } },
       'Look for examples'),
     findingExamples && React.createElement(ExampleFinder, {
-      word: (editItem.word || '').trim(), existingSentences: localSentences,
+      word: (editItem.word || '').trim(), existingSentences: localSentences, onTapWord,
       onAdd: (s) => {
         if (localSentences.some(x => x.ja === s.ja)) return;
         const next = [...localSentences, { ja: s.ja, en: s.en || null }];
