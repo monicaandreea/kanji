@@ -431,6 +431,7 @@ const STUDY_TYPES = [
   { id: 'write_reading', name: 'Write (reading)', desc: 'see kana, write the kanji' },
   { id: 'recognise',     name: 'Kanji recognition', desc: 'see kanji, recall meaning' },
   { id: 'sentence',      name: 'Sentence translation', desc: 'read a sentence, recall meaning', needsSentence: true },
+  { id: 'sentence_jp',   name: 'Sentence production', desc: 'read English, recall the Japanese', needsSentence: true, needsEn: true },
   { id: 'missing',       name: 'Missing word', desc: 'fill the blank in a sentence', needsSentence: true },
 ];
 const STUDY_TYPE_IDS = STUDY_TYPES.map(t => t.id);
@@ -1748,7 +1749,10 @@ function StudyMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTap
   // Which of the enabled types can this word actually use right now?
   const eligibleTypes = (() => {
     const enabled = (studyTypes && studyTypes.length ? studyTypes : ['write_meaning']);
-    let list = STUDY_TYPES.filter(t => enabled.includes(t.id) && (!t.needsSentence || hasSentence));
+    const hasEn = sentences.some(s => s && s.en);
+    let list = STUDY_TYPES.filter(t => enabled.includes(t.id)
+      && (!t.needsSentence || hasSentence)
+      && (!t.needsEn || hasEn));
     // If a sentence-only set was chosen but this word has no sentence, fall back
     // to recognition so the user is never stuck on a blank card.
     if (!list.length) list = [STUDY_TYPES.find(t => t.id === 'recognise')];
@@ -1762,7 +1766,16 @@ function StudyMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTap
   let pick = pickRef && pickRef.current;
   if (isReview || !pick || pick.key !== pickKey) {
     const t = eligibleTypes[Math.floor(Math.random() * eligibleTypes.length)];
-    const sIdx = hasSentence ? Math.floor(Math.random() * sentences.length) : -1;
+    // Types that show the English side must land on a sentence that has one.
+    let sIdx = -1;
+    if (hasSentence) {
+      if (t.needsEn) {
+        const withEn = sentences.map((s, i) => (s && s.en) ? i : -1).filter(i => i >= 0);
+        sIdx = withEn.length ? withEn[Math.floor(Math.random() * withEn.length)] : Math.floor(Math.random() * sentences.length);
+      } else {
+        sIdx = Math.floor(Math.random() * sentences.length);
+      }
+    }
     const ms = item.meanings || [];
     let meanings = ms;
     if (ms.length > 2) {
@@ -2041,6 +2054,43 @@ function StudyMode({ items, progress, onAnswer, onCurrentWord, onTapKanji, onTap
             </div>
             <div style={{ fontSize:14, color:C.ink, marginTop:4 }}>{item.meanings.join(', ')}</div>
             {statLine}
+          </div>
+        )}
+        {gradeBar}
+      </div>
+    );
+  }
+
+  // ── SENTENCE PRODUCTION (English prompt, recall the Japanese) ───────────────
+  if (type === 'sentence_jp' && sentence && sentence.en) {
+    return (
+      <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+        <div style={{ textAlign:'center' }}>
+          <div style={{ fontSize:12, color:C.muted, textTransform:'uppercase', letterSpacing:2, marginBottom:12 }}>How would you say this?</div>
+          <div style={{ fontSize:19, lineHeight:1.7, color:C.ink }}>{sentence.en}</div>
+          {hint && (
+            <div style={{ fontSize:14, color:C.muted, marginTop:10 }}>
+              {item.meanings.join(', ')}
+            </div>
+          )}
+          <div style={{ display:'flex', gap:8, justifyContent:'center', marginTop:14 }}>
+            <IconBtn symbol="✎" title="Edit word" onClick={()=>onEditWord && onEditWord(item)} />
+            <IconBtn symbol="あ" title="Furigana" toggle={true} active={furigana} onClick={onToggleFurigana} />
+            <IconBtn symbol="？" title="Hint (show the word's meaning)" disabled={hint || revealed} onClick={()=>setHint(true)} />
+          </div>
+        </div>
+        {revealed && (
+          <div style={{ background:C.paperDark, borderRadius:8, padding:'14px 16px', border:`1px solid ${C.line}` }}>
+            <div style={{ fontSize:21, lineHeight:2, color:C.ink, textAlign:'center' }}>
+              {React.createElement(TappableSentence, { sentence: sentence.ja, furigana, onTapWord })}
+            </div>
+            <div style={{ textAlign:'center', marginTop:10 }}>
+              <div style={{ fontSize:16, fontWeight:600, color:C.ink }}>
+                <TappableKanji text={item.word} onTapKanji={onTapKanji} /> · <KanaReading word={item.word} fallback={item.reading} />
+              </div>
+              <div style={{ fontSize:14, color:C.ink, marginTop:4 }}>{item.meanings.join(', ')}</div>
+              {statLine}
+            </div>
           </div>
         )}
         {gradeBar}
