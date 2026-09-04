@@ -586,6 +586,24 @@ async function storageSet(key, val) {
   supabaseSet(key, val, ts).finally(() => { delete pendingWrites[key]; });
 }
 
+// Force-pull for the manual "Sync now" button. The automatic guard keeps local
+// when its timestamp looks newer, which can wrongly block a real incoming
+// change (device clocks differ). An explicit tap means "give me what's in the
+// cloud", so we adopt the cloud copy outright. If the cloud has nothing for a
+// key, we upload local so the other device can receive it.
+async function storageGetForce(key) {
+  const remote = await supabaseGet(key);
+  const localVal = localGet(key);
+  const localTime = localTs(key);
+  if (remote === null) {
+    if (localVal != null) supabaseSet(key, localVal, localTime || Date.now());
+    return { value: localVal, pulled: false };
+  }
+  localSet(key, remote.value);
+  setLocalTs(key, remote.ts);
+  return { value: remote.value, pulled: true };
+}
+
 // Returns a word's example sentences as an array of {ja, en}, migrating from
 // the older single sentence/sentenceEn fields on the fly. De-duplicates by ja.
 // A word counts as mastered if it was explicitly marked (sticky flag) OR its
@@ -2462,7 +2480,7 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
 
 // -- Account screen - full page for sync ID management --------------------
 function AccountScreen({ onClose, onReset, onLogout, onExport, onDeleteAll, sessionSize, onSessionSize, masteryTarget, onMasteryTarget,
-    theme, onSetTheme, customAccent, customBase, onSetCustomColors, studyTypes, onToggleStudyType, colorWords, onToggleColorWords, reviewMastered, onToggleReviewMastered, historyN, onSetHistoryN, historyMode, onSetHistoryMode, lastSync, syncing, onSyncNow, firstRun }) {
+    theme, onSetTheme, customAccent, customBase, onSetCustomColors, studyTypes, onToggleStudyType, colorWords, onToggleColorWords, reviewMastered, onToggleReviewMastered, historyN, onSetHistoryN, historyMode, onSetHistoryMode, lastSync, syncing, syncNote, onSyncNow, firstRun }) {
   const [userId, setUserIdState] = React.useState(getUserId());
   const [input, setInput] = React.useState('');
   const [copied, setCopied] = React.useState(false);
@@ -2656,9 +2674,10 @@ function AccountScreen({ onClose, onReset, onLogout, onExport, onDeleteAll, sess
         : null,
       syncing ? 'Syncing…' : 'Sync now'
     ),
-    React.createElement('div', { style: { fontSize: 12, color: C.muted, marginTop: 8, textAlign: 'center' } },
+    React.createElement('div', { style: { fontSize: 12, color: syncNote ? C.accent : C.muted, marginTop: 8, textAlign: 'center' } },
       syncing ? 'Checking the cloud for changes…'
-        : (lastSync ? `Last synced ${syncAgo(lastSync)}` : 'Not synced yet this session.')),
+        : (syncNote ? syncNote
+          : (lastSync ? `Last synced ${syncAgo(lastSync)}` : 'Not synced yet this session.'))),
 
     React.createElement('div', { style: { height: 1, background: C.line, margin: '24px 0' } }),
 
@@ -3885,23 +3904,28 @@ function App() {
     return Number.isFinite(t) && t > 0 ? t : null;
   });
   const [syncing, setSyncing] = useState(false);
+  const [syncNote, setSyncNote] = useState(null); // brief result note after a manual sync
   const syncingRef = React.useRef(false);
-  const resyncFromCloud = React.useCallback(async () => {
+  const resyncFromCloud = React.useCallback(async (force) => {
     if (syncingRef.current || !SUPABASE_ENABLED) return;
-    syncingRef.current = true; setSyncing(true);
+    syncingRef.current = true; setSyncing(true); setSyncNote(null);
     try {
+      const get = force ? storageGetForce : (k) => storageGet(k).then(v => ({ value: v, pulled: false }));
       const [p, w, d, lib, hist] = await Promise.all([
-        storageGet(PROGRESS_KEY), storageGet(WORDS_KEY), storageGet(DECK_KEY),
-        storageGet(LIBRARY_KEY), storageGet(HISTORY_KEY),
+        get(PROGRESS_KEY), get(WORDS_KEY), get(DECK_KEY), get(LIBRARY_KEY), get(HISTORY_KEY),
       ]);
-      if (p) setProgress(p);
-      if (w) setItems(w);
-      if (Array.isArray(d)) setActiveIds(d);
-      if (Array.isArray(lib)) setLibrary(lib);
-      if (Array.isArray(hist)) setHistory(hist);
+      if (p.value) setProgress(p.value);
+      if (w.value) setItems(w.value);
+      if (Array.isArray(d.value)) setActiveIds(d.value);
+      if (Array.isArray(lib.value)) setLibrary(lib.value);
+      if (Array.isArray(hist.value)) setHistory(hist.value);
       const now = Date.now();
       setLastSync(now);
       try { localStorage.setItem(SYNC_TIME_KEY, String(now)); } catch {}
+      if (force) {
+        const pulled = [p, w, d, lib, hist].some(r => r.pulled);
+        setSyncNote(pulled ? 'Updated from the cloud.' : 'Already up to date.');
+      }
     } finally {
       syncingRef.current = false; setSyncing(false);
     }
@@ -3918,10 +3942,10 @@ function App() {
       lastAutoSyncRef.current = now;
       resyncFromCloud();
     };
-    window.addEventListener('visibilitychange', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
     window.addEventListener('focus', onFocus);
     return () => {
-      window.removeEventListener('visibilitychange', onFocus);
+      document.removeEventListener('visibilitychange', onFocus);
       window.removeEventListener('focus', onFocus);
     };
   }, [resyncFromCloud]);
@@ -4221,7 +4245,7 @@ function App() {
       sessionSize, onSessionSize:setSessionSize,
       masteryTarget, onMasteryTarget:setMasteryTarget,
       theme, onSetTheme:setThemeMode, customAccent, customBase, onSetCustomColors:setCustomColors,
-      lastSync, syncing, onSyncNow:resyncFromCloud,
+      lastSync, syncing, syncNote, onSyncNow:()=>resyncFromCloud(true),
       studyTypes, onToggleStudyType:toggleStudyType,
       reviewMastered, onToggleReviewMastered:toggleReviewMastered,
       colorWords, onToggleColorWords:toggleColorWords,
