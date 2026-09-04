@@ -25,6 +25,7 @@
   input[type="search"]::-webkit-search-decoration { -webkit-appearance: none; appearance: none; display: none; }
   button { font-family: inherit; }
   textarea, input { font-family: inherit; }
+  @keyframes kanjispin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
@@ -2461,7 +2462,7 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
 
 // -- Account screen - full page for sync ID management --------------------
 function AccountScreen({ onClose, onReset, onLogout, onExport, onDeleteAll, sessionSize, onSessionSize, masteryTarget, onMasteryTarget,
-    theme, onSetTheme, customAccent, customBase, onSetCustomColors, studyTypes, onToggleStudyType, colorWords, onToggleColorWords, reviewMastered, onToggleReviewMastered, historyN, onSetHistoryN, historyMode, onSetHistoryMode, firstRun }) {
+    theme, onSetTheme, customAccent, customBase, onSetCustomColors, studyTypes, onToggleStudyType, colorWords, onToggleColorWords, reviewMastered, onToggleReviewMastered, historyN, onSetHistoryN, historyMode, onSetHistoryMode, lastSync, syncing, onSyncNow, firstRun }) {
   const [userId, setUserIdState] = React.useState(getUserId());
   const [input, setInput] = React.useState('');
   const [copied, setCopied] = React.useState(false);
@@ -2639,6 +2640,27 @@ function AccountScreen({ onClose, onReset, onLogout, onExport, onDeleteAll, sess
       )
     ),
     React.createElement('div', { style: { height: 1, background: C.line, marginBottom: 24 } }),
+
+    React.createElement('div', { style: { fontSize: 14, color: C.ink, fontWeight: 600, marginBottom: 8 } }, 'Sync'),
+    React.createElement('div', { style: { color: C.muted, fontSize: 13, marginBottom: 12, lineHeight: 1.6 } },
+      'Your words and progress sync across devices. This refreshes from the cloud - it also happens automatically when you return to the app.'),
+    React.createElement('button', { onClick: () => { if (!syncing && onSyncNow) onSyncNow(); },
+      disabled: syncing,
+      style: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, width: '100%',
+        padding: '12px', borderRadius: 8, cursor: syncing ? 'default' : 'pointer',
+        border: `1px solid ${C.line}`, background: C.card, color: C.ink, fontSize: 14, fontWeight: 600 } },
+      syncing
+        ? React.createElement('span', { style: { display: 'inline-block', width: 14, height: 14,
+            border: `2px solid ${C.line}`, borderTopColor: C.accent, borderRadius: '50%',
+            animation: 'kanjispin 0.7s linear infinite' } })
+        : null,
+      syncing ? 'Syncing…' : 'Sync now'
+    ),
+    React.createElement('div', { style: { fontSize: 12, color: C.muted, marginTop: 8, textAlign: 'center' } },
+      syncing ? 'Checking the cloud for changes…'
+        : (lastSync ? `Last synced ${syncAgo(lastSync)}` : 'Not synced yet this session.')),
+
+    React.createElement('div', { style: { height: 1, background: C.line, margin: '24px 0' } }),
 
     React.createElement('div', { style: { fontSize: 14, color: C.ink, fontWeight: 600, marginBottom: 8 } }, 'Study type'),
     React.createElement('div', { style: { color: C.muted, fontSize: 13, marginBottom: 12, lineHeight: 1.6 } },
@@ -3271,6 +3293,22 @@ function toParas(text) {
   return (text || '').trim().split(/\n+/).map(p => p.trim()).filter(Boolean);
 }
 
+// Last-sync label: relative for recent, explicit date+time otherwise.
+function syncAgo(ts) {
+  if (!ts) return '';
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 10) return 'just now';
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} min ago`;
+  const d = new Date(ts);
+  const today = new Date();
+  const sameDay = d.toDateString() === today.toDateString();
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (sameDay) return `today at ${time}`;
+  return `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} at ${time}`;
+}
+
 // Rough relative time for history rows.
 function timeAgo(ts) {
   if (!ts) return '';
@@ -3837,6 +3875,57 @@ function App() {
 
   const persistDeck = (deck) => { storageSet(DECK_KEY, deck); };
 
+  // -- Manual + automatic re-sync ---------------------------------------------
+  // Re-reads every synced key from the cloud and applies anything newer. Uses
+  // storageGet, whose timestamp guard means the cloud only wins when it's at
+  // least as new as our local copy - so this can't clobber unsynced local work.
+  const SYNC_TIME_KEY = "kanji-last-sync";
+  const [lastSync, setLastSync] = useState(() => {
+    const t = parseInt(localStorage.getItem(SYNC_TIME_KEY) || "0", 10);
+    return Number.isFinite(t) && t > 0 ? t : null;
+  });
+  const [syncing, setSyncing] = useState(false);
+  const syncingRef = React.useRef(false);
+  const resyncFromCloud = React.useCallback(async () => {
+    if (syncingRef.current || !SUPABASE_ENABLED) return;
+    syncingRef.current = true; setSyncing(true);
+    try {
+      const [p, w, d, lib, hist] = await Promise.all([
+        storageGet(PROGRESS_KEY), storageGet(WORDS_KEY), storageGet(DECK_KEY),
+        storageGet(LIBRARY_KEY), storageGet(HISTORY_KEY),
+      ]);
+      if (p) setProgress(p);
+      if (w) setItems(w);
+      if (Array.isArray(d)) setActiveIds(d);
+      if (Array.isArray(lib)) setLibrary(lib);
+      if (Array.isArray(hist)) setHistory(hist);
+      const now = Date.now();
+      setLastSync(now);
+      try { localStorage.setItem(SYNC_TIME_KEY, String(now)); } catch {}
+    } finally {
+      syncingRef.current = false; setSyncing(false);
+    }
+  }, []);
+
+  // Auto re-sync when the app regains focus (e.g. you pick the phone back up
+  // after using the laptop), throttled so quick tab flips don't spam the network.
+  const lastAutoSyncRef = React.useRef(0);
+  useEffect(() => {
+    const onFocus = () => {
+      if (document.visibilityState === 'hidden') return;
+      const now = Date.now();
+      if (now - lastAutoSyncRef.current < 5000) return; // throttle: 5s
+      lastAutoSyncRef.current = now;
+      resyncFromCloud();
+    };
+    window.addEventListener('visibilitychange', onFocus);
+    window.addEventListener('focus', onFocus);
+    return () => {
+      window.removeEventListener('visibilitychange', onFocus);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [resyncFromCloud]);
+
   // Build/refill the active deck. Sticky: keeps existing active words,
   // drops mastered ones, and tops up to sessionSize from unmastered words.
   useEffect(() => {
@@ -4132,6 +4221,7 @@ function App() {
       sessionSize, onSessionSize:setSessionSize,
       masteryTarget, onMasteryTarget:setMasteryTarget,
       theme, onSetTheme:setThemeMode, customAccent, customBase, onSetCustomColors:setCustomColors,
+      lastSync, syncing, onSyncNow:resyncFromCloud,
       studyTypes, onToggleStudyType:toggleStudyType,
       reviewMastered, onToggleReviewMastered:toggleReviewMastered,
       colorWords, onToggleColorWords:toggleColorWords,
