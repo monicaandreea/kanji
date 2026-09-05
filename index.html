@@ -560,6 +560,24 @@ async function supabaseSet(key, val, ts) {
 }
 
 // -- Unified storage - local wins if its timestamp is newer than remote ---
+// Auto-sync read: adopt the cloud copy only when it's at least as new as our
+// local copy. NEVER pushes local up (background sync must not silently overwrite
+// another device's cloud data), and never reverts a genuinely-newer local change
+// (it just leaves local alone in that case). Uploading is only ever the explicit
+// Upload button; the timestamp check here only decides whether to PULL.
+async function storageGetPullOnly(key) {
+  if (pendingWrites[key]) return localGet(key);
+  const remote = await supabaseGet(key);
+  if (remote === null) return localGet(key);
+  const localTime = localTs(key);
+  if (remote.ts >= localTime) {
+    localSet(key, remote.value);
+    setLocalTs(key, remote.ts);
+    return remote.value;
+  }
+  return localGet(key); // local looks newer - leave it, do NOT push
+}
+
 async function storageGet(key) {
   // If a write for this key is still in flight, trust local immediately
   if (pendingWrites[key]) return localGet(key);
@@ -2678,7 +2696,7 @@ function AccountScreen({ onClose, onReset, onLogout, onExport, onDeleteAll, sess
 
     React.createElement('div', { style: { fontSize: 14, color: C.ink, fontWeight: 600, marginBottom: 8 } }, 'Sync'),
     React.createElement('div', { style: { color: C.muted, fontSize: 13, marginBottom: 12, lineHeight: 1.6 } },
-      'Data syncs automatically when you reopen the app. To force it, upload from the device with changes, then download on the other. Check compares without changing anything.'),
+      'The app doesn\u2019t perform auto-syncing, only auto-checking. The move is always in your hands. Check compares without changing anything; Upload and Download move data the direction you choose.'),
     React.createElement('div', { style: { display: 'flex', gap: 8 } },
       [['\u21C5', 'Check', onCheck], ['\u2191', 'Upload', onPushToCloud], ['\u2193', 'Download', onPullFromCloud]].map(([sym, label, fn]) =>
         React.createElement('button', { key: label, onClick: () => { if (!syncing && fn) fn(); }, disabled: syncing,
@@ -3901,11 +3919,11 @@ function App() {
   useEffect(() => {
     (async () => {
       const [savedProgress, savedWords, savedDeck, savedLibrary, savedHistory] = await Promise.all([
-        storageGet(PROGRESS_KEY),
-        storageGet(WORDS_KEY),
-        storageGet(DECK_KEY),
-        storageGet(LIBRARY_KEY),
-        storageGet(HISTORY_KEY),
+        storageGetPullOnly(PROGRESS_KEY),
+        storageGetPullOnly(WORDS_KEY),
+        storageGetPullOnly(DECK_KEY),
+        storageGetPullOnly(LIBRARY_KEY),
+        storageGetPullOnly(HISTORY_KEY),
       ]);
       if (savedProgress) setProgress(savedProgress);
       if (savedWords) setItems(savedWords);
@@ -3930,6 +3948,7 @@ function App() {
   });
   const [syncing, setSyncing] = useState(false);
   const [syncNote, setSyncNote] = useState(null); // brief result note after a manual sync
+  const [syncMismatch, setSyncMismatch] = useState(false); // drives the settings-icon badge
   const syncingRef = React.useRef(false);
   const KEYS = [PROGRESS_KEY, WORDS_KEY, DECK_KEY, LIBRARY_KEY, HISTORY_KEY];
   const applyPulled = (vals) => {
@@ -3946,10 +3965,12 @@ function App() {
     try { localStorage.setItem(SYNC_TIME_KEY, String(now)); } catch {}
   };
   // Read-only check: compare this device's word + saved-text counts against the
-  // cloud, without changing anything. Sets a descriptive note.
-  const checkAgainstCloud = React.useCallback(async () => {
+  // cloud, changing nothing. In silent mode (auto-check) it only sets the badge
+  // flag; otherwise it also sets the descriptive note for the Sync screen.
+  const checkAgainstCloud = React.useCallback(async (silent) => {
     if (syncingRef.current || !SUPABASE_ENABLED) return;
-    syncingRef.current = true; setSyncing(true); setSyncNote(null);
+    syncingRef.current = true;
+    if (!silent) { setSyncing(true); setSyncNote(null); }
     try {
       const [words, texts] = await Promise.all([
         storageCompareCount(WORDS_KEY), storageCompareCount(LIBRARY_KEY),
@@ -3962,18 +3983,22 @@ function App() {
       };
       const w = describe('Words', words);
       const t = describe('Saved texts', texts);
-      if (!w && !t) {
-        setSyncNote({ match: true, text: `In sync: ${words.localN} words, ${texts.localN} saved texts.` });
-      } else {
-        const anyLocalAhead = (words.localN > (words.remoteN||0)) || (texts.localN > (texts.remoteN||0));
-        const anyCloudAhead = (words.localN < (words.remoteN||0)) || (texts.localN < (texts.remoteN||0));
-        let hint = '';
-        if (anyLocalAhead && !anyCloudAhead) hint = 'Tap Upload to send this device up.';
-        else if (anyCloudAhead && !anyLocalAhead) hint = 'Tap Download to get the cloud copy.';
-        else hint = 'Each side has unique changes - use "+ Add list" to merge instead.';
-        setSyncNote({ diff: true, lines: [w, t].filter(Boolean), hint });
+      const differs = !!(w || t);
+      setSyncMismatch(differs);
+      if (!silent) {
+        if (!differs) {
+          setSyncNote({ match: true, text: `In sync: ${words.localN} words, ${texts.localN} saved texts.` });
+        } else {
+          const anyLocalAhead = (words.localN > (words.remoteN||0)) || (texts.localN > (texts.remoteN||0));
+          const anyCloudAhead = (words.localN < (words.remoteN||0)) || (texts.localN < (texts.remoteN||0));
+          let hint = '';
+          if (anyLocalAhead && !anyCloudAhead) hint = 'Tap Upload to send this device up.';
+          else if (anyCloudAhead && !anyLocalAhead) hint = 'Tap Download to get the cloud copy.';
+          else hint = 'Each side has unique changes - use "+ Add list" to merge instead.';
+          setSyncNote({ diff: true, lines: [w, t].filter(Boolean), hint });
+        }
       }
-    } finally { syncingRef.current = false; setSyncing(false); }
+    } finally { syncingRef.current = false; if (!silent) setSyncing(false); }
   }, []);
 
   // Download from cloud: replace this device's data with the cloud's.
@@ -3984,6 +4009,7 @@ function App() {
       const results = await Promise.all(KEYS.map(storagePullForce));
       applyPulled(results);
       stampSync();
+      setSyncMismatch(false);
       setSyncNote({ text: 'Downloaded from the cloud.' });
     } finally { syncingRef.current = false; setSyncing(false); }
   }, []);
@@ -3994,39 +4020,32 @@ function App() {
     try {
       await Promise.all(KEYS.map(storagePushForce));
       stampSync();
+      setSyncMismatch(false);
       setSyncNote({ text: 'Uploaded this device to the cloud.' });
     } finally { syncingRef.current = false; setSyncing(false); }
   }, []);
-  // Safe auto-sync on focus keeps the timestamp guard (never overwrites newer
-  // local work). Only pulls; never surprises you by pushing.
-  const resyncFromCloud = React.useCallback(async () => {
-    if (syncingRef.current || !SUPABASE_ENABLED) return;
-    syncingRef.current = true; setSyncing(true);
-    try {
-      const results = await Promise.all(KEYS.map(k => storageGet(k).then(v => ({ value: v }))));
-      applyPulled(results);
-      stampSync();
-    } finally { syncingRef.current = false; setSyncing(false); }
-  }, []);
 
-  // Auto re-sync when the app regains focus (e.g. you pick the phone back up
-  // after using the laptop), throttled so quick tab flips don't spam the network.
-  const lastAutoSyncRef = React.useRef(0);
+  // Auto-CHECK on load and whenever the app regains focus. This only reads and
+  // compares - it never moves data. If it finds a difference it lights the
+  // settings-icon badge; the actual upload/download stays a manual choice.
+  const lastAutoCheckRef = React.useRef(0);
   useEffect(() => {
-    const onFocus = () => {
+    if (!ready) return;
+    const runCheck = () => {
       if (document.visibilityState === 'hidden') return;
       const now = Date.now();
-      if (now - lastAutoSyncRef.current < 5000) return; // throttle: 5s
-      lastAutoSyncRef.current = now;
-      resyncFromCloud();
+      if (now - lastAutoCheckRef.current < 5000) return; // throttle: 5s
+      lastAutoCheckRef.current = now;
+      checkAgainstCloud(true); // silent: badge only
     };
-    document.addEventListener('visibilitychange', onFocus);
-    window.addEventListener('focus', onFocus);
+    runCheck(); // once on load
+    document.addEventListener('visibilitychange', runCheck);
+    window.addEventListener('focus', runCheck);
     return () => {
-      document.removeEventListener('visibilitychange', onFocus);
-      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', runCheck);
+      window.removeEventListener('focus', runCheck);
     };
-  }, [resyncFromCloud]);
+  }, [ready, checkAgainstCloud]);
 
   // Build/refill the active deck. Sticky: keeps existing active words,
   // drops mastered ones, and tops up to sessionSize from unmastered words.
@@ -4415,9 +4434,15 @@ function App() {
       React.createElement('div', { style:{ display:'flex', gap:1, flexWrap:'wrap', justifyContent:'flex-end' } },
         [['study','Study'],['words','Words'],['read','Read'],['kanji','Dictionary'],['account','⚙']].map(([m,label])=>
           React.createElement('button', { key:m, onClick:()=> m==='account' ? setShowAccount(true) : setMode(m), style:{
-            padding:'6px 7px', borderRadius:6, border:'none',
+            padding:'6px 7px', borderRadius:6, border:'none', position:'relative',
             background:mode===m? (bestText(C.header)==='white'?'rgba(255,255,255,0.2)':'rgba(0,0,0,0.12)') :'transparent',
-            color:bestText(C.header), fontSize:12, cursor:'pointer', whiteSpace:'nowrap' }}, label)
+            color: (m==='account' && syncMismatch) ? '#e0a030' : bestText(C.header),
+            fontSize:12, cursor:'pointer', whiteSpace:'nowrap' }},
+            label,
+            (m==='account' && syncMismatch) && React.createElement('span', { style:{
+              position:'absolute', top:2, right:1, width:8, height:8, borderRadius:'50%',
+              background:'#e0a030', border:`1.5px solid ${C.header}` } })
+          )
         )
       )
     ),
