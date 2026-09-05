@@ -591,27 +591,34 @@ async function storageSet(key, val) {
 // newer we adopt it (pulled). If local is newer we push it up (pushed) so the
 // other device can receive it. This is the direction the plain guard lacked -
 // it never pushed a device that was ahead. Returns what happened per key.
-async function storageReconcile(key) {
+// Explicit one-directional sync helpers for the manual buttons. No timestamp
+// comparison - the user chooses the direction, so it's unambiguous.
+// Download: take the cloud's copy for this key, overwriting local.
+// Read-only comparison for the "Check" button. Fetches the cloud's copy of a
+// key and returns cloud + local arrays' lengths, changing nothing.
+async function storageCompareCount(key) {
   const remote = await supabaseGet(key);
   const localVal = localGet(key);
-  const localTime = localTs(key);
-  if (remote === null) {
-    if (localVal != null) { await supabaseSet(key, localVal, localTime || Date.now()); return { value: localVal, pushed: true, pulled: false }; }
-    return { value: localVal, pushed: false, pulled: false };
-  }
-  if (localVal != null && localTime > remote.ts) {
-    // This device is ahead - push local up so the cloud (and other device) gets it.
-    await supabaseSet(key, localVal, localTime);
-    return { value: localVal, pushed: true, pulled: false };
-  }
-  if (remote.ts > localTime) {
-    // Cloud is ahead - adopt it.
-    localSet(key, remote.value);
-    setLocalTs(key, remote.ts);
-    return { value: remote.value, pushed: false, pulled: true };
-  }
-  // Equal timestamps - nothing to do; keep local.
-  return { value: localVal != null ? localVal : remote.value, pushed: false, pulled: false };
+  const localN = Array.isArray(localVal) ? localVal.length : 0;
+  const remoteN = (remote && Array.isArray(remote.value)) ? remote.value.length : (remote === null ? null : 0);
+  return { localN, remoteN };
+}
+
+async function storagePullForce(key) {
+  const remote = await supabaseGet(key);
+  if (remote === null) return { value: localGet(key), changed: false };
+  localSet(key, remote.value);
+  setLocalTs(key, remote.ts || Date.now());
+  return { value: remote.value, changed: true };
+}
+// Upload: push this device's copy for this key up to the cloud, overwriting it.
+async function storagePushForce(key) {
+  const localVal = localGet(key);
+  if (localVal == null) return { value: null, changed: false };
+  const ts = Date.now();
+  await supabaseSet(key, localVal, ts);
+  setLocalTs(key, ts);
+  return { value: localVal, changed: true };
 }
 
 // Returns a word's example sentences as an array of {ja, en}, migrating from
@@ -2490,7 +2497,7 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
 
 // -- Account screen - full page for sync ID management --------------------
 function AccountScreen({ onClose, onReset, onLogout, onExport, onDeleteAll, sessionSize, onSessionSize, masteryTarget, onMasteryTarget,
-    theme, onSetTheme, customAccent, customBase, onSetCustomColors, studyTypes, onToggleStudyType, colorWords, onToggleColorWords, reviewMastered, onToggleReviewMastered, historyN, onSetHistoryN, historyMode, onSetHistoryMode, lastSync, syncing, syncNote, onSyncNow, firstRun }) {
+    theme, onSetTheme, customAccent, customBase, onSetCustomColors, studyTypes, onToggleStudyType, colorWords, onToggleColorWords, reviewMastered, onToggleReviewMastered, historyN, onSetHistoryN, historyMode, onSetHistoryMode, lastSync, syncing, syncNote, onCheck, onPushToCloud, onPullFromCloud, firstRun }) {
   const [userId, setUserIdState] = React.useState(getUserId());
   const [input, setInput] = React.useState('');
   const [copied, setCopied] = React.useState(false);
@@ -2671,23 +2678,31 @@ function AccountScreen({ onClose, onReset, onLogout, onExport, onDeleteAll, sess
 
     React.createElement('div', { style: { fontSize: 14, color: C.ink, fontWeight: 600, marginBottom: 8 } }, 'Sync'),
     React.createElement('div', { style: { color: C.muted, fontSize: 13, marginBottom: 12, lineHeight: 1.6 } },
-      'Your words and progress sync across devices. This refreshes from the cloud - it also happens automatically when you return to the app.'),
-    React.createElement('button', { onClick: () => { if (!syncing && onSyncNow) onSyncNow(); },
-      disabled: syncing,
-      style: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, width: '100%',
-        padding: '12px', borderRadius: 8, cursor: syncing ? 'default' : 'pointer',
-        border: `1px solid ${C.line}`, background: C.card, color: C.ink, fontSize: 14, fontWeight: 600 } },
-      syncing
-        ? React.createElement('span', { style: { display: 'inline-block', width: 14, height: 14,
-            border: `2px solid ${C.line}`, borderTopColor: C.accent, borderRadius: '50%',
-            animation: 'kanjispin 0.7s linear infinite' } })
-        : null,
-      syncing ? 'Syncing…' : 'Sync now'
+      'Data syncs automatically when you reopen the app. To force it, upload from the device with changes, then download on the other. Check compares without changing anything.'),
+    React.createElement('div', { style: { display: 'flex', gap: 8 } },
+      [['\u21C5', 'Check', onCheck], ['\u2191', 'Upload', onPushToCloud], ['\u2193', 'Download', onPullFromCloud]].map(([sym, label, fn]) =>
+        React.createElement('button', { key: label, onClick: () => { if (!syncing && fn) fn(); }, disabled: syncing,
+          style: { flex: 1, padding: '10px 6px', borderRadius: 8, cursor: syncing ? 'default' : 'pointer',
+            border: `1px solid ${C.line}`, background: C.card, color: C.ink, fontSize: 12.5, fontWeight: 600,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 } },
+          React.createElement('span', { style: { fontSize: 14 } }, sym), label)
+      )
     ),
-    React.createElement('div', { style: { fontSize: 12, color: syncNote ? C.accent : C.muted, marginTop: 8, textAlign: 'center' } },
-      syncing ? 'Checking the cloud for changes…'
-        : (syncNote ? syncNote
-          : (lastSync ? `Last synced ${syncAgo(lastSync)}` : 'Not synced yet this session.'))),
+    (() => {
+      const base = { fontSize: 12, marginTop: 8, textAlign: 'center', lineHeight: 1.5 };
+      if (syncing) return React.createElement('div', { style: { ...base, color: C.muted } }, 'Syncing\u2026');
+      if (syncNote && syncNote.match)
+        return React.createElement('div', { style: { ...base, color: C.correct, fontWeight: 600 } }, '\u2713 ' + syncNote.text);
+      if (syncNote && syncNote.diff)
+        return React.createElement('div', { style: base },
+          syncNote.lines.map((l, i) => React.createElement('div', { key: i, style: { color: C.gold, fontWeight: 600 } }, l)),
+          React.createElement('div', { style: { color: C.muted, marginTop: 2 } }, syncNote.hint)
+        );
+      if (syncNote && syncNote.text)
+        return React.createElement('div', { style: { ...base, color: C.accent, fontWeight: 600 } }, syncNote.text);
+      return React.createElement('div', { style: { ...base, color: C.muted } },
+        lastSync ? `Last synced ${syncAgo(lastSync)}` : 'Not synced yet this session.');
+    })(),
 
     React.createElement('div', { style: { height: 1, background: C.line, margin: '24px 0' } }),
 
@@ -3916,35 +3931,82 @@ function App() {
   const [syncing, setSyncing] = useState(false);
   const [syncNote, setSyncNote] = useState(null); // brief result note after a manual sync
   const syncingRef = React.useRef(false);
-  const resyncFromCloud = React.useCallback(async (force) => {
+  const KEYS = [PROGRESS_KEY, WORDS_KEY, DECK_KEY, LIBRARY_KEY, HISTORY_KEY];
+  const applyPulled = (vals) => {
+    const [p, w, d, lib, hist] = vals;
+    if (p && p.value) setProgress(p.value);
+    if (w && w.value) setItems(w.value);
+    if (d && Array.isArray(d.value)) setActiveIds(d.value);
+    if (lib && Array.isArray(lib.value)) setLibrary(lib.value);
+    if (hist && Array.isArray(hist.value)) setHistory(hist.value);
+  };
+  const stampSync = () => {
+    const now = Date.now();
+    setLastSync(now);
+    try { localStorage.setItem(SYNC_TIME_KEY, String(now)); } catch {}
+  };
+  // Read-only check: compare this device's word + saved-text counts against the
+  // cloud, without changing anything. Sets a descriptive note.
+  const checkAgainstCloud = React.useCallback(async () => {
     if (syncingRef.current || !SUPABASE_ENABLED) return;
     syncingRef.current = true; setSyncing(true); setSyncNote(null);
     try {
-      const get = force ? storageReconcile : (k) => storageGet(k).then(v => ({ value: v, pulled: false, pushed: false }));
-      const [p, w, d, lib, hist] = await Promise.all([
-        get(PROGRESS_KEY), get(WORDS_KEY), get(DECK_KEY), get(LIBRARY_KEY), get(HISTORY_KEY),
+      const [words, texts] = await Promise.all([
+        storageCompareCount(WORDS_KEY), storageCompareCount(LIBRARY_KEY),
       ]);
-      if (p.value) setProgress(p.value);
-      if (w.value) setItems(w.value);
-      if (Array.isArray(d.value)) setActiveIds(d.value);
-      if (Array.isArray(lib.value)) setLibrary(lib.value);
-      if (Array.isArray(hist.value)) setHistory(hist.value);
-      const now = Date.now();
-      setLastSync(now);
-      try { localStorage.setItem(SYNC_TIME_KEY, String(now)); } catch {}
-      if (force) {
-        const all = [p, w, d, lib, hist];
-        const pulled = all.some(r => r.pulled);
-        const pushed = all.some(r => r.pushed);
-        setSyncNote(
-          pulled && pushed ? 'Synced changes both ways.'
-          : pulled ? 'Updated from the cloud.'
-          : pushed ? 'Uploaded this device\u2019s changes.'
-          : 'Already up to date.');
+      const describe = (label, c) => {
+        const r = c.remoteN == null ? 0 : c.remoteN;
+        if (c.localN === r) return null;
+        const dir = c.localN > r ? 'this device ahead' : 'cloud ahead';
+        return `${label}: ${c.localN} here / ${r} in cloud (${dir})`;
+      };
+      const w = describe('Words', words);
+      const t = describe('Saved texts', texts);
+      if (!w && !t) {
+        setSyncNote({ match: true, text: `In sync: ${words.localN} words, ${texts.localN} saved texts.` });
+      } else {
+        const anyLocalAhead = (words.localN > (words.remoteN||0)) || (texts.localN > (texts.remoteN||0));
+        const anyCloudAhead = (words.localN < (words.remoteN||0)) || (texts.localN < (texts.remoteN||0));
+        let hint = '';
+        if (anyLocalAhead && !anyCloudAhead) hint = 'Tap Upload to send this device up.';
+        else if (anyCloudAhead && !anyLocalAhead) hint = 'Tap Download to get the cloud copy.';
+        else hint = 'Each side has unique changes - use "+ Add list" to merge instead.';
+        setSyncNote({ diff: true, lines: [w, t].filter(Boolean), hint });
       }
-    } finally {
-      syncingRef.current = false; setSyncing(false);
-    }
+    } finally { syncingRef.current = false; setSyncing(false); }
+  }, []);
+
+  // Download from cloud: replace this device's data with the cloud's.
+  const pullFromCloud = React.useCallback(async () => {
+    if (syncingRef.current || !SUPABASE_ENABLED) return;
+    syncingRef.current = true; setSyncing(true); setSyncNote(null);
+    try {
+      const results = await Promise.all(KEYS.map(storagePullForce));
+      applyPulled(results);
+      stampSync();
+      setSyncNote({ text: 'Downloaded from the cloud.' });
+    } finally { syncingRef.current = false; setSyncing(false); }
+  }, []);
+  // Upload this device: push this device's data up, overwriting the cloud.
+  const pushToCloud = React.useCallback(async () => {
+    if (syncingRef.current || !SUPABASE_ENABLED) return;
+    syncingRef.current = true; setSyncing(true); setSyncNote(null);
+    try {
+      await Promise.all(KEYS.map(storagePushForce));
+      stampSync();
+      setSyncNote({ text: 'Uploaded this device to the cloud.' });
+    } finally { syncingRef.current = false; setSyncing(false); }
+  }, []);
+  // Safe auto-sync on focus keeps the timestamp guard (never overwrites newer
+  // local work). Only pulls; never surprises you by pushing.
+  const resyncFromCloud = React.useCallback(async () => {
+    if (syncingRef.current || !SUPABASE_ENABLED) return;
+    syncingRef.current = true; setSyncing(true);
+    try {
+      const results = await Promise.all(KEYS.map(k => storageGet(k).then(v => ({ value: v }))));
+      applyPulled(results);
+      stampSync();
+    } finally { syncingRef.current = false; setSyncing(false); }
   }, []);
 
   // Auto re-sync when the app regains focus (e.g. you pick the phone back up
@@ -4261,7 +4323,7 @@ function App() {
       sessionSize, onSessionSize:setSessionSize,
       masteryTarget, onMasteryTarget:setMasteryTarget,
       theme, onSetTheme:setThemeMode, customAccent, customBase, onSetCustomColors:setCustomColors,
-      lastSync, syncing, syncNote, onSyncNow:()=>resyncFromCloud(true),
+      lastSync, syncing, syncNote, onCheck:checkAgainstCloud, onPushToCloud:pushToCloud, onPullFromCloud:pullFromCloud,
       studyTypes, onToggleStudyType:toggleStudyType,
       reviewMastered, onToggleReviewMastered:toggleReviewMastered,
       colorWords, onToggleColorWords:toggleColorWords,
