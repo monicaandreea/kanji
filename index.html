@@ -586,22 +586,32 @@ async function storageSet(key, val) {
   supabaseSet(key, val, ts).finally(() => { delete pendingWrites[key]; });
 }
 
-// Force-pull for the manual "Sync now" button. The automatic guard keeps local
-// when its timestamp looks newer, which can wrongly block a real incoming
-// change (device clocks differ). An explicit tap means "give me what's in the
-// cloud", so we adopt the cloud copy outright. If the cloud has nothing for a
-// key, we upload local so the other device can receive it.
-async function storageGetForce(key) {
+// Two-way reconcile for the manual "Sync now" button. Compares this device's
+// copy with the cloud's by timestamp: whichever is newer wins. If the cloud is
+// newer we adopt it (pulled). If local is newer we push it up (pushed) so the
+// other device can receive it. This is the direction the plain guard lacked -
+// it never pushed a device that was ahead. Returns what happened per key.
+async function storageReconcile(key) {
   const remote = await supabaseGet(key);
   const localVal = localGet(key);
   const localTime = localTs(key);
   if (remote === null) {
-    if (localVal != null) supabaseSet(key, localVal, localTime || Date.now());
-    return { value: localVal, pulled: false };
+    if (localVal != null) { await supabaseSet(key, localVal, localTime || Date.now()); return { value: localVal, pushed: true, pulled: false }; }
+    return { value: localVal, pushed: false, pulled: false };
   }
-  localSet(key, remote.value);
-  setLocalTs(key, remote.ts);
-  return { value: remote.value, pulled: true };
+  if (localVal != null && localTime > remote.ts) {
+    // This device is ahead - push local up so the cloud (and other device) gets it.
+    await supabaseSet(key, localVal, localTime);
+    return { value: localVal, pushed: true, pulled: false };
+  }
+  if (remote.ts > localTime) {
+    // Cloud is ahead - adopt it.
+    localSet(key, remote.value);
+    setLocalTs(key, remote.ts);
+    return { value: remote.value, pushed: false, pulled: true };
+  }
+  // Equal timestamps - nothing to do; keep local.
+  return { value: localVal != null ? localVal : remote.value, pushed: false, pulled: false };
 }
 
 // Returns a word's example sentences as an array of {ja, en}, migrating from
@@ -3910,7 +3920,7 @@ function App() {
     if (syncingRef.current || !SUPABASE_ENABLED) return;
     syncingRef.current = true; setSyncing(true); setSyncNote(null);
     try {
-      const get = force ? storageGetForce : (k) => storageGet(k).then(v => ({ value: v, pulled: false }));
+      const get = force ? storageReconcile : (k) => storageGet(k).then(v => ({ value: v, pulled: false, pushed: false }));
       const [p, w, d, lib, hist] = await Promise.all([
         get(PROGRESS_KEY), get(WORDS_KEY), get(DECK_KEY), get(LIBRARY_KEY), get(HISTORY_KEY),
       ]);
@@ -3923,8 +3933,14 @@ function App() {
       setLastSync(now);
       try { localStorage.setItem(SYNC_TIME_KEY, String(now)); } catch {}
       if (force) {
-        const pulled = [p, w, d, lib, hist].some(r => r.pulled);
-        setSyncNote(pulled ? 'Updated from the cloud.' : 'Already up to date.');
+        const all = [p, w, d, lib, hist];
+        const pulled = all.some(r => r.pulled);
+        const pushed = all.some(r => r.pushed);
+        setSyncNote(
+          pulled && pushed ? 'Synced changes both ways.'
+          : pulled ? 'Updated from the cloud.'
+          : pushed ? 'Uploaded this device\u2019s changes.'
+          : 'Already up to date.');
       }
     } finally {
       syncingRef.current = false; setSyncing(false);
