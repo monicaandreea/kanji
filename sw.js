@@ -1,6 +1,6 @@
 // Service worker for 漢字 Practice — enables offline use.
 // Bump CACHE_VERSION whenever you want to force-refresh cached files.
-const CACHE_VERSION = 'kanji-v134';
+const CACHE_VERSION = 'kanji-v135';
 const CORE_ASSETS = [
   './',
   './index.html',
@@ -35,6 +35,14 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
+
+  // Never cache API/data requests (Supabase, Tatoeba worker, etc.) - these must
+  // always be fresh, or reads return stale data. Let them hit the network.
+  const url = req.url || '';
+  if (url.includes('supabase.co') || url.includes('workers.dev') ||
+      url.includes('/rest/v1/') || url.includes('api.anthropic.com')) {
+    return; // don't call respondWith - browser handles it normally, uncached
+  }
 
   const isNavigation = req.mode === 'navigate' ||
     (req.headers.get('accept') || '').includes('text/html');
