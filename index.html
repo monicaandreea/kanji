@@ -1154,6 +1154,79 @@ function initDictionary() {
 // Kick off dictionary load in the background as soon as the script runs
 if (typeof window !== 'undefined' && window.indexedDB) { initDictionary(); }
 
+// ---- CC-CEDICT (Chinese) --------------------------------------------------
+// Bundled cedict.json: { simp: {form:[pinyin,[defs]]}, meaning:{gloss:[simp,...]} }
+// Cached in IndexedDB after first load. Provides same-character lookup plus an
+// English-meaning "pivot" to the everyday Chinese word.
+let cedictData = null;
+let cedictPromise = null;
+function initCedict() {
+  if (cedictPromise) return cedictPromise;
+  cedictPromise = (async () => {
+    let db = null;
+    try { db = await idbOpen(); } catch {}
+    if (db) {
+      const cached = await idbGet(db, 'cedict-v1');
+      if (cached && cached.simp) { cedictData = cached; return true; }
+    }
+    try {
+      const res = await fetch('cedict.json');
+      if (!res.ok) throw new Error('no cedict');
+      const json = await res.json();
+      cedictData = json;
+      if (db) { idbSet(db, 'cedict-v1', json); }
+      return true;
+    } catch (e) { cedictData = { simp: {}, meaning: {} }; return false; }
+  })();
+  return cedictPromise;
+}
+if (typeof window !== 'undefined' && window.indexedDB) { initCedict(); }
+
+// Normalize an English gloss the same way the offline index was built.
+function _cleanGloss(g) {
+  g = g.replace(/\([^)]*\)/g, '').replace(/\bCL:.*/g, '')
+       .replace(/\bvariant of.*/gi, '').replace(/\bold variant.*/gi, '')
+       .replace(/[^a-z ]/gi, ' ').toLowerCase();
+  return g.split(/\s+/).filter(Boolean).join(' ');
+}
+function _cedictEntry(simp) {
+  const row = cedictData && cedictData.simp[simp];
+  if (!row) return null;
+  return { simp, pinyin: row[0], defs: row[1] };
+}
+// Look up the Chinese for a Japanese word. Returns { same, pivot: [...] }.
+// `same` = the exact-characters Chinese entry (reliable) or null.
+// `pivot` = up to 2 everyday-word candidates found via shared English meaning.
+function chineseFor(jpWord, meanings) {
+  if (!cedictData) return { same: null, pivot: [] };
+  // same-character: exact, else kanji-only core (drop kana)
+  let same = _cedictEntry(jpWord);
+  if (!same) {
+    const core = [...jpWord].filter(c => !(c >= '\u3040' && c <= '\u30ff')).join('');
+    if (core && core !== jpWord) same = _cedictEntry(core);
+  }
+  // pivot via meaning: the offline index is pre-sorted by commonness, so a
+  // candidate's position in the list is the main quality signal.
+  const scored = {};
+  const prim = (meanings || []).slice(0, 2);
+  prim.forEach((mn, mi) => {
+    const cg = _cleanGloss(mn);
+    const cands = cedictData.meaning[cg];
+    if (!cands) return;
+    cands.forEach((simp, rank) => {
+      if (same && simp === same.simp) return;
+      const e = _cedictEntry(simp);
+      if (!e) return;
+      if ((e.defs[0] || '').match(/variant of|surname/i)) return;
+      const total = rank + (mi === 0 ? 0 : 3); // prefer higher-ranked + primary-meaning matches
+      if (!(simp in scored) || total < scored[simp][0]) scored[simp] = [total, e];
+    });
+  });
+  const ranked = Object.values(scored).sort((a, b) => a[0] - b[0]).map(x => x[1]);
+  const pivot = ranked.slice(0, 2);
+  return { same, pivot };
+}
+
 function fetchWordInfo(word) {
   if (wordInfoCache[word]) return wordInfoCache[word];
   const p = (async () => {
@@ -1325,6 +1398,96 @@ function fetchKanjiInfo(char) {
 }
 
 // Renders a single kanji's dictionary entry (readings, meanings, stroke order)
+// Async hook: resolve the Chinese lookup for a Japanese word (single char or word).
+function useChinese(jpWord, meanings) {
+  const [zh, setZh] = React.useState(null);
+  React.useEffect(() => {
+    let alive = true;
+    if (!jpWord) { setZh(null); return; }
+    initCedict().then(() => { if (alive) setZh(chineseFor(jpWord, meanings || [])); });
+    return () => { alive = false; };
+  }, [jpWord, (meanings || []).join('|')]);
+  return zh;
+}
+
+// One Chinese entry: simplified + pinyin + meaning. Colors come from the theme.
+function ZhEntry({ entry, label, labelColor }) {
+  if (!entry) return null;
+  return React.createElement('div', { style: { flex: 1, minWidth: 0 } },
+    label && React.createElement('div', { style: { fontSize: 9.5, fontWeight: 700, letterSpacing: 0.4,
+      color: labelColor, textTransform: 'uppercase', marginBottom: 3 } }, label),
+    React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 7, flexWrap: 'wrap' } },
+      React.createElement('span', { style: { fontSize: 22, fontWeight: 700, color: C.ink } }, entry.simp),
+      React.createElement('span', { style: { fontSize: 13, color: C.accent, fontWeight: 600 } }, entry.pinyin)
+    ),
+    React.createElement('div', { style: { fontSize: 12, color: C.ink, marginTop: 3, lineHeight: 1.4 } },
+      entry.defs.slice(0, 3).join(', '))
+  );
+}
+
+// The Chinese card used in the word + dictionary popups. `stacked` forces a
+// vertical layout (used inside the tighter "More info" panel); otherwise the
+// exact and everyday entries sit side by side.
+function ChineseCard({ zh, stacked }) {
+  if (!zh || (!zh.same && !zh.pivot.length)) return null;
+  const same = zh.same;
+  const everyday = zh.pivot[0]; // best everyday-word candidate
+  const entries = [];
+  if (same) entries.push({ e: same, label: everyday ? 'Same characters' : null, color: C.accent });
+  if (everyday) entries.push({ e: everyday, label: same ? 'Everyday word' : null, color: C.gold });
+  if (!entries.length) return null;
+  const cardStyle = { background: C.card, border: `1px solid ${C.line}`, borderRadius: 10, overflow: 'hidden' };
+  const pad = { padding: '11px 13px' };
+  if (entries.length === 1 || stacked) {
+    return React.createElement('div', { style: cardStyle },
+      React.createElement('div', { style: pad },
+        entries.map((it, i) => React.createElement(React.Fragment, { key: i },
+          i > 0 && React.createElement('div', { style: { height: 1, background: C.line, margin: '10px 0' } }),
+          React.createElement(ZhEntry, { entry: it.e, label: it.label, labelColor: it.color })
+        ))
+      )
+    );
+  }
+  // side by side
+  return React.createElement('div', { style: { ...cardStyle, display: 'flex' } },
+    React.createElement('div', { style: { flex: 1, ...pad } },
+      React.createElement(ZhEntry, { entry: entries[0].e, label: entries[0].label, labelColor: entries[0].color })),
+    React.createElement('div', { style: { width: 1, background: C.line } }),
+    React.createElement('div', { style: { flex: 1, ...pad } },
+      React.createElement(ZhEntry, { entry: entries[1].e, label: entries[1].label, labelColor: entries[1].color }))
+  );
+}
+
+// Chinese block for the word popup (side by side) and dictionary popup (stacked).
+function WordChinese({ word, meanings, stacked }) {
+  const zh = useChinese(word, meanings);
+  if (!zh || (!zh.same && !zh.pivot.length)) return null;
+  return React.createElement('div', { style: { marginBottom: 12 } },
+    React.createElement('div', { style: { fontSize: 11, color: C.accent, letterSpacing: 1, marginBottom: 7 } }, 'CHINESE'),
+    React.createElement(ChineseCard, { zh, stacked })
+  );
+}
+
+// Single-character Chinese section for the kanji popup: the character's own
+// Simplified form + pinyin + meaning (no pivot). Only shows if CEDICT has it.
+function KanjiChinese({ char }) {
+  const [zh, setZh] = React.useState(null);
+  React.useEffect(() => {
+    let alive = true;
+    initCedict().then(() => { if (alive) setZh(_cedictEntry(char)); });
+    return () => { alive = false; };
+  }, [char]);
+  if (!zh) return null;
+  return React.createElement('div', { style: { marginBottom: 10 } },
+    React.createElement('div', { style: { fontSize: 11, color: C.muted, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 3 } }, 'Chinese'),
+    React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 10 } },
+      React.createElement('span', { style: { fontSize: 24, fontWeight: 700, color: C.ink } }, zh.simp),
+      React.createElement('span', { style: { fontSize: 15, color: C.accent, fontWeight: 600 } }, zh.pinyin)
+    ),
+    React.createElement('div', { style: { fontSize: 13, color: C.ink, marginTop: 2 } }, zh.defs.slice(0, 3).join(', '))
+  );
+}
+
 function KanjiInfoCard({ char }) {
   const [info, setInfo] = React.useState(undefined); // undefined=loading, null=failed
   React.useEffect(() => {
@@ -1354,6 +1517,7 @@ function KanjiInfoCard({ char }) {
         React.createElement('div', { style: { fontSize: 11, color: C.muted, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 2 } }, 'On readings'),
         React.createElement('div', null, info.on_readings.join('、'))
       ),
+      React.createElement(KanjiChinese, { char }),
       React.createElement('div', { style: { display: 'flex', gap: 16, marginTop: 6, fontSize: 12, color: C.muted } },
         info.stroke_count != null && React.createElement('span', null, `${info.stroke_count} strokes`),
         info.grade != null && React.createElement('span', null, `Grade ${info.grade}`),
@@ -1457,6 +1621,8 @@ function Collapsible({ title, count, children }) {
 function WordPopup({ token, onClose, onAdd, existing }) {
   const [info, setInfo] = React.useState(undefined);
   const [added, setAdded] = React.useState(false);
+  const [cedictReady, setCedictReady] = React.useState(!!cedictData);
+  React.useEffect(() => { if (!cedictData) initCedict().then(() => setCedictReady(true)); }, []);
   const [override, setOverride] = React.useState(null); // {basic, surface} when navigating to a see-also word
   const [kanjiView, setKanjiView] = React.useState(null); // single kanji being inspected from the headword
   const activeToken = override || token;
@@ -1587,8 +1753,15 @@ function WordPopup({ token, onClose, onAdd, existing }) {
       info && (() => {
         const hasMore = (info.notes && info.notes.length) || (info.related && info.related.length)
           || (info.antonym && info.antonym.length) || (info.altForms && info.altForms.length);
-        if (!hasMore) return null;
+        const zh = cedictData ? chineseFor(lookup, allMeanings) : null;
+        const hasZh = zh && (zh.same || zh.pivot.length);
+        if (!hasMore && !hasZh) return null;
         return React.createElement(Collapsible, { key: 'more', title: 'More info' },
+          hasZh && React.createElement('div', { style: { marginBottom: 12 } },
+            React.createElement('div', { style: { fontSize: 10, color: C.accent, letterSpacing: 0.5, fontWeight: 600, marginBottom: 6 } }, 'CHINESE'),
+            React.createElement(ChineseCard, { zh, stacked: true }),
+            hasMore && React.createElement('div', { style: { height: 1, background: C.line, margin: '13px 0' } })
+          ),
           info.notes && info.notes.length > 0 && React.createElement('div', { style: { marginBottom: 8 } },
             React.createElement('div', { style: { fontSize: 11, color: C.muted, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 } }, 'Notes'),
             info.notes.map((n, i) => React.createElement('div', { key: i }, n))
@@ -2454,6 +2627,7 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
 
   // View mode: sentences are read-only. Edit form: full add/remove controls.
   const viewBody = isEdit && React.createElement(React.Fragment, null,
+    React.createElement(WordChinese, { word: (editItem.word || '').trim(), meanings: editItem.meanings || [] }),
     renderSentences(true),
     React.createElement('div', {
       onClick: () => setFindingExamples(true),
