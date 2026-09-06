@@ -1438,13 +1438,19 @@ function ChineseCard({ zh, stacked }) {
   if (!entries.length) return null;
   const cardStyle = { background: C.card, border: `1px solid ${C.line}`, borderRadius: 10, overflow: 'hidden' };
   const pad = { padding: '11px 13px' };
-  if (entries.length === 1 || stacked) {
+  if (stacked) {
+    // Inside the "More info" panel already, so no outer card - just the entries.
+    return React.createElement('div', null,
+      entries.map((it, i) => React.createElement(React.Fragment, { key: i },
+        i > 0 && React.createElement('div', { style: { height: 1, background: C.line, margin: '10px 0' } }),
+        React.createElement(ZhEntry, { entry: it.e, label: it.label, labelColor: it.color })
+      ))
+    );
+  }
+  if (entries.length === 1) {
     return React.createElement('div', { style: cardStyle },
       React.createElement('div', { style: pad },
-        entries.map((it, i) => React.createElement(React.Fragment, { key: i },
-          i > 0 && React.createElement('div', { style: { height: 1, background: C.line, margin: '10px 0' } }),
-          React.createElement(ZhEntry, { entry: it.e, label: it.label, labelColor: it.color })
-        ))
+        entries.map((it, i) => React.createElement(ZhEntry, { key: i, entry: it.e, label: it.label, labelColor: it.color }))
       )
     );
   }
@@ -2472,6 +2478,7 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
   const [localSentences, setLocalSentences] = useState(isEdit ? getSentences(editItem) : []);
   const [addingSentence, setAddingSentence] = useState(false);
   const [findingExamples, setFindingExamples] = useState(false);
+  const [expandSentences, setExpandSentences] = useState(false);
   const [newJa, setNewJa] = useState('');
   const [newEn, setNewEn] = useState('');
   const [editSentIdx, setEditSentIdx] = useState(-1); // which sentence is being edited inline (-1 = none)
@@ -2563,9 +2570,12 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
 
   // Sentence list - `readOnly` hides the ✕ remove buttons and the add-sentence
   // control (used in the quick-view panel; edit mode passes readOnly=false).
-  const renderSentences = (readOnly) => React.createElement('div', null,
+  const renderSentences = (readOnly) => {
+   const collapsible = readOnly && localSentences.length > 2;
+   const visible = (collapsible && !expandSentences) ? localSentences.slice(0, 2) : localSentences;
+   return React.createElement('div', null,
     localSentences.length > 0 && React.createElement('div', { style:{ background:C.paperDark, borderRadius:8, padding:'12px 14px', marginBottom: readOnly ? 0 : 10 } },
-      localSentences.map((s, i) =>
+      visible.map((s, i) =>
         (!readOnly && editSentIdx === i)
           ? React.createElement('div', { key:i, style:{
               paddingTop: i===0?0:12, marginTop: i===0?0:12,
@@ -2601,7 +2611,12 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
               !readOnly && React.createElement('button', { onClick:()=>removeSentence(i), title:'Remove this sentence',
                 style:{ background:'none', border:'none', color:C.muted, cursor:'pointer', fontSize:15, flexShrink:0, padding:'2px 4px' } }, '✕')
             )
-      )
+      ),
+      collapsible && React.createElement('div', {
+        onClick: () => setExpandSentences(v => !v),
+        style: { marginTop: 12, paddingTop: 10, borderTop: `1px solid ${C.line}`,
+          textAlign: 'center', fontSize: 13, color: C.accent, fontWeight: 600, cursor: 'pointer' } },
+        expandSentences ? 'Show less' : `Show ${localSentences.length - 2} more`)
     ),
     // Add-sentence inline form / button (edit mode only)
     !readOnly && (addingSentence
@@ -2624,6 +2639,7 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
       : React.createElement('button', { onClick:()=>setAddingSentence(true),
           style:{ ...btn(C.card, C.accent), border:`1px dashed ${C.accent}`, padding:'9px 12px', width:'100%' } }, '+ Add sentence'))
   );
+  };
 
   // View mode: sentences are read-only. Edit form: full add/remove controls.
   const viewBody = isEdit && React.createElement(React.Fragment, null,
