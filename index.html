@@ -30,11 +30,23 @@
 </head>
 <body>
 <script>
-  // Apply saved theme to body background immediately to avoid a flash
+  // Apply saved theme to the body background AND the status-bar tint immediately,
+  // before React mounts, so there's no flash and the mobile status bar matches.
   (function(){
     try {
-      var dark = localStorage.getItem('kanji-theme') === 'dark';
-      document.body.style.background = dark ? '#1a1320' : '#f7f4ee';
+      var theme = localStorage.getItem('kanji-theme') || 'light';
+      var header, paper;
+      if (theme === 'dark') { header = '#2a1d38'; paper = '#1a1320'; }
+      else if (theme === 'custom') {
+        var base = localStorage.getItem('kanji-custom-base') || 'dark';
+        if (base === 'light') { header = '#2e1a3e'; paper = '#f7f4ee'; }
+        else if (base === 'black') { header = '#000000'; paper = '#000000'; }
+        else { header = '#1a1320'; paper = '#1a1320'; }
+      } else { header = '#2e1a3e'; paper = '#f7f4ee'; }
+      document.body.style.background = paper;
+      var meta = document.querySelector('meta[name="theme-color"]');
+      if (!meta) { meta = document.createElement('meta'); meta.name = 'theme-color'; document.head.appendChild(meta); }
+      meta.setAttribute('content', header);
     } catch(e){}
   })();
 </script>
@@ -3630,7 +3642,7 @@ function ReadSaveDialog({ topics, initial, onCancel, onSave }) {
 
 function ReadMode({ onTapWord, raw, setRaw, processed, setProcessed,
     library, history, historyN, onSaveToLibrary, onUpdateLibrary, onDeleteLibrary,
-    onDeleteHistory, onClearHistory, onLoadFromHistory, onPushHistory,
+    onDeleteHistory, onClearHistory, onLoadFromHistory, onPushHistory, onStudyFromText,
     view, setView, openId, setOpenId, topicFilter, setTopicFilter }) {
   const [showSave, setShowSave] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -3789,9 +3801,14 @@ function ReadMode({ onTapWord, raw, setRaw, processed, setProcessed,
           )
         : React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
             backLink(() => setView('library')),
-            React.createElement('button', { onClick: startEdit,
-              style: { background: 'none', border: 'none', color: C.muted, fontSize: 13,
-                cursor: 'pointer', padding: 0 } }, 'Edit')
+            React.createElement('div', { style: { display: 'flex', gap: 16, alignItems: 'center' } },
+              React.createElement('button', { onClick: () => onStudyFromText && onStudyFromText(openItem.text),
+                style: { background: 'none', border: 'none', color: C.accent, fontSize: 13, fontWeight: 600,
+                  cursor: 'pointer', padding: 0 } }, 'Study'),
+              React.createElement('button', { onClick: startEdit,
+                style: { background: 'none', border: 'none', color: C.muted, fontSize: 13,
+                  cursor: 'pointer', padding: 0 } }, 'Edit')
+            )
           ),
       header,
       editing
@@ -4075,6 +4092,47 @@ function App() {
   };
   // Load a history entry back into Read, already processed.
   const loadFromHistory = (h) => { readHistoryIdRef.current = h.id; setReadRaw(h.text); setReadProcessed(toParas(h.text)); };
+
+  // "Study" on a saved text: find which of the user's saved words appear in the
+  // text (using the same detection that colour-codes them), then replace the
+  // active study deck with exactly those. Asks first, since it clears the deck.
+  const studyFromText = (text) => {
+    if (!items || !items.length) { askConfirm('You have no saved words yet.', { confirmLabel: 'OK' }); return; }
+    const statusMap = buildWordStatusMap(items, progress, masteryTarget);
+    // Map each word/reading key back to the item id(s).
+    const keyToIds = {};
+    items.forEach(it => {
+      const w = it.word || '';
+      (keyToIds[w] = keyToIds[w] || []).push(it.id);
+      const hasKanji = [...w].some(isKanjiChar);
+      if (!hasKanji && it.reading) { const r = kataToHira(it.reading); (keyToIds[r] = keyToIds[r] || []).push(it.id); }
+    });
+    tokenizeSentence((text || '').replace(/\n+/g, ''), (tokens) => {
+      const foundIds = new Set();
+      if (tokens) {
+        tokens.forEach(tok => {
+          if (!tokenStatus(tok, statusMap)) return; // not one of the user's words
+          [tok.basic, tok.surface].forEach(c => { if (c && keyToIds[c]) keyToIds[c].forEach(id => foundIds.add(id)); });
+          const surface = tok.surface || '';
+          const isKana = surface && ![...surface].some(isKanjiChar);
+          if (isKana) { const h = kataToHira(tok.basic || surface); if (keyToIds[h]) keyToIds[h].forEach(id => foundIds.add(id)); }
+        });
+      }
+      const ids = [...foundIds];
+      if (!ids.length) {
+        askConfirm('None of your saved words appear in this text.', { confirmLabel: 'OK' });
+        return;
+      }
+      askConfirm(`Replace your study list with the ${ids.length} saved word${ids.length === 1 ? '' : 's'} from this text?`,
+        { confirmLabel: 'Replace' }).then(ok => {
+        if (!ok) return;
+        shuffledOrderRef.current = null; // force deck order rebuild
+        setActiveIds(ids);
+        persistDeck(ids);
+        setDeckIdx(0);
+      });
+    });
+  };
   const [wordsSearch, setWordsSearch] = useState('');
   const [wordsFilter, setWordsFilter] = useState('all'); // all | studied | mastered | new | active
   const [wordsSortMode, setWordsSortMode] = useState('alpha');
@@ -4658,7 +4716,7 @@ function App() {
         library, history, historyN,
         onSaveToLibrary:saveToLibrary, onUpdateLibrary:updateLibrary, onDeleteLibrary:deleteLibrary,
         onDeleteHistory:deleteHistory, onClearHistory:clearHistory,
-        onLoadFromHistory:loadFromHistory, onPushHistory:pushHistory,
+        onLoadFromHistory:loadFromHistory, onPushHistory:pushHistory, onStudyFromText:studyFromText,
         view:readView, setView:setReadView, openId:readOpenId, setOpenId:setReadOpenId,
         topicFilter:readTopicFilter, setTopicFilter:setReadTopicFilter }),
       mode==='kanji' && React.createElement(KanjiMode, { items, onEditWord:setEditWordTarget, onPopupKanji:setKanjiPopup })
