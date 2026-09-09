@@ -233,7 +233,7 @@ let _confirmListener = null;
 function askConfirm(message, opts) {
   return new Promise(resolve => {
     if (_confirmListener) {
-      _confirmListener({ message, resolve, confirmLabel: (opts && opts.confirmLabel) || 'Confirm', cancelLabel: (opts && opts.cancelLabel) || 'Cancel', danger: !!(opts && opts.danger) });
+      _confirmListener({ message, resolve, confirmLabel: (opts && opts.confirmLabel) || 'Confirm', cancelLabel: (opts && opts.cancelLabel) || 'Cancel', thirdLabel: (opts && opts.thirdLabel) || null, danger: !!(opts && opts.danger) });
     } else {
       // Fallback to native confirm if the dialog host isn't mounted
       resolve(window.confirm(message));
@@ -254,12 +254,21 @@ function ConfirmHost() {
       style: { background: C.paper, borderRadius: 14, padding: 22, width: '100%', maxWidth: 340,
         boxShadow: '0 8px 30px rgba(0,0,0,0.3)' } },
       React.createElement('div', { style: { fontSize: 15, color: C.ink, lineHeight: 1.5, marginBottom: 20 } }, state.message),
-      React.createElement('div', { style: { display: 'flex', gap: 10 } },
-        React.createElement('button', { onClick: () => close(false),
-          style: { ...btn(C.card, C.ink), border: `1px solid ${C.line}`, flex: 1 } }, state.cancelLabel || 'Cancel'),
-        React.createElement('button', { onClick: () => close(true),
-          style: { ...btn(state.danger ? C.wrong : C.accent, 'white'), flex: 1 } }, state.confirmLabel)
-      )
+      state.thirdLabel
+        ? React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 9 } },
+            React.createElement('button', { onClick: () => close(true),
+              style: { ...btn(state.danger ? C.wrong : C.accent, 'white'), width: '100%' } }, state.confirmLabel),
+            React.createElement('button', { onClick: () => close(false),
+              style: { ...btn(C.card, C.ink), border: `1px solid ${C.line}`, width: '100%' } }, state.cancelLabel),
+            React.createElement('button', { onClick: () => close(null),
+              style: { background: 'none', border: 'none', color: C.muted, fontSize: 13, cursor: 'pointer', padding: '4px' } }, state.thirdLabel)
+          )
+        : React.createElement('div', { style: { display: 'flex', gap: 10 } },
+            React.createElement('button', { onClick: () => close(false),
+              style: { ...btn(C.card, C.ink), border: `1px solid ${C.line}`, flex: 1 } }, state.cancelLabel || 'Cancel'),
+            React.createElement('button', { onClick: () => close(true),
+              style: { ...btn(state.danger ? C.wrong : C.accent, 'white'), flex: 1 } }, state.confirmLabel)
+          )
     )
   );
 }
@@ -1506,6 +1515,32 @@ function KanjiChinese({ char }) {
   );
 }
 
+// Find which saved library texts contain a given word. Uses the tokenizer, so
+// matching is consistent with the colour-coding. Async via callback; caches by
+// (word + library signature) so re-taps are instant.
+const _textsWithWordCache = {};
+function findTextsWithWord(word, library, cb) {
+  const lib = library || [];
+  const sig = word + '|' + lib.map(t => t.id).join(',');
+  if (_textsWithWordCache[sig]) { cb(_textsWithWordCache[sig]); return; }
+  const wanted = (word || '').trim();
+  if (!wanted || !lib.length) { cb([]); return; }
+  let pending = lib.length;
+  const matches = [];
+  lib.forEach(item => {
+    tokenizeSentence((item.text || '').replace(/\n+/g, ''), (tokens) => {
+      const hit = tokens && tokens.some(tok => tok.surface === wanted || tok.basic === wanted);
+      if (hit) matches.push(item);
+      if (--pending === 0) {
+        // preserve library order
+        const ordered = lib.filter(it => matches.includes(it));
+        _textsWithWordCache[sig] = ordered;
+        cb(ordered);
+      }
+    });
+  });
+}
+
 function KanjiInfoCard({ char }) {
   const [info, setInfo] = React.useState(undefined); // undefined=loading, null=failed
   React.useEffect(() => {
@@ -2419,6 +2454,55 @@ function FormField({ label, value, setter, placeholder, hint, clearError }) {
 
 // "Look for examples": fetches sentences from Tatoeba and lets you add any to
 // the word's own sentence list. Excludes sentences already on the word.
+// Lists which saved library texts contain a given word. Tapping a title opens
+// that text in the Read tab (via onOpenText).
+function ViewTextsPopup({ word, library, onOpenText, onClose }) {
+  const [state, setState] = React.useState('loading'); // loading | done
+  const [matches, setMatches] = React.useState([]);
+  React.useEffect(() => {
+    let alive = true;
+    findTextsWithWord(word, library, (found) => { if (alive) { setMatches(found); setState('done'); } });
+    return () => { alive = false; };
+  }, [word]);
+  return React.createElement('div', {
+    onClick: onClose,
+    style: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 330,
+      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 } },
+    React.createElement('div', {
+      onClick: e => e.stopPropagation(),
+      style: { background: C.paper, borderRadius: 14, width: '100%', maxWidth: 380, maxHeight: '80vh',
+        display: 'flex', flexDirection: 'column', overflow: 'hidden' } },
+      React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        padding: '16px 18px 12px', borderBottom: `1px solid ${C.line}`, flexShrink: 0 } },
+        React.createElement('div', { style: { fontSize: 15, fontWeight: 700, color: C.ink } }, `Texts with ${word}`),
+        React.createElement('button', { onClick: onClose, style: { background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: C.muted } }, '\u2715')
+      ),
+      state === 'loading'
+        ? React.createElement('div', { style: { padding: '30px 20px', textAlign: 'center', color: C.muted, fontSize: 13 } }, 'Checking your texts\u2026')
+        : (matches.length === 0
+          ? React.createElement('div', { style: { padding: '30px 20px', textAlign: 'center', color: C.muted, fontSize: 13 } }, 'None of your saved texts contain this word.')
+          : React.createElement('div', { style: { padding: 14, overflowY: 'auto' } },
+              React.createElement('div', { style: { fontSize: 12, color: C.muted, marginBottom: 10 } },
+                `In ${matches.length} of your saved text${matches.length === 1 ? '' : 's'}. Tap one to open it.`),
+              React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 7 } },
+                matches.map(it => React.createElement('div', { key: it.id,
+                  onClick: () => onOpenText(it.id),
+                  style: { background: C.card, border: `1px solid ${C.line}`, borderRadius: 8, padding: '10px 12px',
+                    display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' } },
+                  React.createElement('div', { style: { flex: 1, minWidth: 0 } },
+                    React.createElement('div', { style: { fontSize: 14, fontWeight: 600, color: C.accent } }, it.title),
+                    React.createElement('div', { style: { fontSize: 11, color: C.muted, marginTop: 2,
+                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, it.text)
+                  ),
+                  it.topic && React.createElement('span', { style: { background: C.paperDark, color: C.ink,
+                    fontSize: 10, padding: '3px 8px', borderRadius: 999, whiteSpace: 'nowrap', flexShrink: 0 } }, it.topic)
+                ))
+              )
+            ))
+    )
+  );
+}
+
 function ExampleFinder({ word, existingSentences, onAdd, onClose, onTapWord }) {
   const [state, setState] = React.useState('loading'); // loading | done | error | empty
   const [results, setResults] = React.useState([]);
@@ -2476,7 +2560,7 @@ function ExampleFinder({ word, existingSentences, onAdd, onClose, onTapWord }) {
   );
 }
 
-function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemove, onResetWord, onMarkMastered, onTapWord }) {
+function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemove, onResetWord, onMarkMastered, onTapWord, library, onOpenText }) {
   const [word, setWord] = useState(editItem ? editItem.word : '');
   const [reading, setReading] = useState(editItem ? (editItem.reading||'') : '');
   const [meanings, setMeanings] = useState(editItem ? (editItem.meanings||[]).join(', ') : '');
@@ -2490,6 +2574,7 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
   const [localSentences, setLocalSentences] = useState(isEdit ? getSentences(editItem) : []);
   const [addingSentence, setAddingSentence] = useState(false);
   const [findingExamples, setFindingExamples] = useState(false);
+  const [viewingTexts, setViewingTexts] = useState(false);
   const [expandSentences, setExpandSentences] = useState(false);
   const [newJa, setNewJa] = useState('');
   const [newEn, setNewEn] = useState('');
@@ -2657,10 +2742,20 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
   const viewBody = isEdit && React.createElement(React.Fragment, null,
     React.createElement(WordChinese, { word: (editItem.word || '').trim(), meanings: editItem.meanings || [] }),
     renderSentences(true),
-    React.createElement('div', {
-      onClick: () => setFindingExamples(true),
-      style: { textAlign:'left', marginTop:10, fontSize:13, color:C.muted, cursor:'pointer' } },
-      'Look for examples'),
+    React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 10 } },
+      React.createElement('div', {
+        onClick: () => setFindingExamples(true),
+        style: { fontSize: 13, color: C.muted, cursor: 'pointer' } },
+        'Look for examples'),
+      onOpenText && React.createElement('div', {
+        onClick: () => setViewingTexts(true),
+        style: { fontSize: 13, color: C.muted, cursor: 'pointer' } },
+        'View texts')
+    ),
+    viewingTexts && React.createElement(ViewTextsPopup, {
+      word: (editItem.word || '').trim(), library, onOpenText,
+      onClose: () => setViewingTexts(false)
+    }),
     findingExamples && React.createElement(ExampleFinder, {
       word: (editItem.word || '').trim(), existingSentences: localSentences, onTapWord,
       onAdd: (s) => {
@@ -4099,9 +4194,9 @@ function App() {
   const studyFromText = (text) => {
     if (!items || !items.length) { askConfirm('You have no saved words yet.', { confirmLabel: 'OK' }); return; }
     const statusMap = buildWordStatusMap(items, progress, masteryTarget);
-    // Map each word/reading key back to the item id(s).
     const keyToIds = {};
     items.forEach(it => {
+      if (wordMastered(progress[it.id], masteryTarget)) return; // never include mastered words
       const w = it.word || '';
       (keyToIds[w] = keyToIds[w] || []).push(it.id);
       const hasKanji = [...w].some(isKanjiChar);
@@ -4111,7 +4206,7 @@ function App() {
       const foundIds = new Set();
       if (tokens) {
         tokens.forEach(tok => {
-          if (!tokenStatus(tok, statusMap)) return; // not one of the user's words
+          if (!tokenStatus(tok, statusMap)) return;
           [tok.basic, tok.surface].forEach(c => { if (c && keyToIds[c]) keyToIds[c].forEach(id => foundIds.add(id)); });
           const surface = tok.surface || '';
           const isKana = surface && ![...surface].some(isKanjiChar);
@@ -4120,16 +4215,19 @@ function App() {
       }
       const ids = [...foundIds];
       if (!ids.length) {
-        askConfirm('None of your saved words appear in this text.', { confirmLabel: 'OK' });
+        askConfirm('None of your saved words appear in this text (mastered words are skipped).', { confirmLabel: 'OK' });
         return;
       }
-      askConfirm(`Replace your study list with the ${ids.length} saved word${ids.length === 1 ? '' : 's'} from this text?`,
-        { confirmLabel: 'Replace' }).then(ok => {
-        if (!ok) return;
-        shuffledOrderRef.current = null; // force deck order rebuild
-        setActiveIds(ids);
-        persistDeck(ids);
-        setDeckIdx(0);
+      const n = ids.length;
+      askConfirm(`Found ${n} saved word${n === 1 ? '' : 's'} in this text (mastered ones skipped). Add them to your current study list, or replace it?`,
+        { confirmLabel: 'Add to my list', cancelLabel: 'Replace my list', thirdLabel: 'Cancel' }).then(choice => {
+        if (choice === null) return; // Cancel
+        shuffledOrderRef.current = null;
+        if (choice) {
+          setActiveIds(prev => { const merged = [...new Set([...(prev || []), ...ids])]; persistDeck(merged); return merged; });
+        } else {
+          setActiveIds(ids); persistDeck(ids); setDeckIdx(0);
+        }
       });
     });
   };
@@ -4705,7 +4803,8 @@ function App() {
       onRemove:()=>{ handleRemove(editWordTarget.id); setEditWordTarget(null); },
       onResetWord:()=>{ resetWord(editWordTarget.id); },
       onMarkMastered:()=>{ markMastered(editWordTarget.id); setEditWordTarget(null); advanceDeck(); },
-      onTapWord:setWordPopup }),
+      onTapWord:setWordPopup, library,
+      onOpenText:(textId)=>{ setEditWordTarget(null); setReadOpenId(textId); setReadView('item'); setMode('read'); } }),
     React.createElement('div', { style:{ maxWidth:420, margin:'0 auto', padding:20, minHeight:'calc(100vh - 60px)' } },
       mode==='study' && (deckEmpty
         ? React.createElement('div', { style:{ textAlign:'center', color:C.muted, padding:'40px 20px' } }, 'No active words. Add some in the Words tab.')
