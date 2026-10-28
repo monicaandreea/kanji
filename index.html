@@ -1094,6 +1094,16 @@ function idbSet(db, key, val) {
     } catch { resolve(false); }
   });
 }
+function idbDel(db, key) {
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction('kv', 'readwrite');
+      tx.objectStore('kv').delete(key);
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => resolve(false);
+    } catch { resolve(false); }
+  });
+}
 
 // Flatten a jmdict xref (array form) into a readable string, e.g. ["丸","まる",1] -> "丸 (まる)"
 function xrefToText(x) {
@@ -1194,7 +1204,7 @@ function initCedict() {
     let db = null;
     try { db = await idbOpen(); } catch {}
     if (db) {
-      const cached = await idbGet(db, 'cedict-v2');
+      const cached = await idbGet(db, 'cedict-v3');
       if (cached && cached.simp) { cedictData = cached; return true; }
     }
     try {
@@ -1202,7 +1212,10 @@ function initCedict() {
       if (!res.ok) throw new Error('no cedict');
       const json = await res.json();
       cedictData = json;
-      if (db) { idbSet(db, 'cedict-v2', json); }
+      if (db) {
+        idbSet(db, 'cedict-v3', json);
+        idbDel(db, 'cedict-v1'); idbDel(db, 'cedict-v2'); // free stale copies (~15MB each)
+      }
       return true;
     } catch (e) { cedictData = { simp: {}, meaning: {} }; return false; }
   })();
