@@ -418,6 +418,7 @@ const MODE_KEY = "kanji-mode";
 const STUDY_TYPES_KEY = "kanji-study-types"; // which practice types are enabled
 const REVIEW_MASTERED_KEY = "kanji-review-mastered"; // occasionally resurface mastered words
 const COLOR_WORDS_KEY = "kanji-color-words"; // colour sentence words by their status
+const WIDE_READ_KEY = "kanji-wide-read";     // let the Read tab use more width on large screens
 // -- Read tab: saved library + unsaved history --------------------------------
 const LIBRARY_KEY = "kanji-read-library-v1";  // synced: [{id,title,topic,text,ts}]
 const HISTORY_KEY = "kanji-read-history-v1";  // synced: [{id,text,ts}]
@@ -1248,6 +1249,42 @@ function chineseFor(jpWord, meanings) {
   return { same, pivot };
 }
 
+// --- Chinese text segmentation (longest-match against CC-CEDICT) ------------
+// Greedy maximum-matching: at each position, take the longest run of Chinese
+// characters that is a known CC-CEDICT word; otherwise emit a single character.
+// Returns an array of { text, zh:true } for Chinese words/chars and { text }
+// for non-Chinese runs (punctuation, spaces, latin). No perfect accuracy, but
+// good enough for tap-to-define.
+function isHanChar(ch) {
+  const c = ch.codePointAt(0);
+  return (c >= 0x4e00 && c <= 0x9fff) || (c >= 0x3400 && c <= 0x4dbf) ||
+         (c >= 0xf900 && c <= 0xfaff) || (c >= 0x20000 && c <= 0x2a6df);
+}
+const MAX_ZH_WORD = 6; // longest CC-CEDICT word length we try to match
+function segmentChinese(text) {
+  const chars = [...(text || '')];
+  const out = [];
+  let i = 0;
+  let buf = '';           // run of non-Han characters (punctuation/latin/space)
+  const flush = () => { if (buf) { out.push({ text: buf }); buf = ''; } };
+  while (i < chars.length) {
+    const ch = chars[i];
+    if (!isHanChar(ch)) { buf += ch; i++; continue; }
+    flush();
+    // try the longest dictionary match starting here
+    let matched = null;
+    const maxLen = Math.min(MAX_ZH_WORD, chars.length - i);
+    for (let len = maxLen; len >= 2; len--) {
+      const cand = chars.slice(i, i + len).join('');
+      if (cedictData && cedictData.simp[cand]) { matched = cand; break; }
+    }
+    if (matched) { out.push({ text: matched, zh: true }); i += [...matched].length; }
+    else { out.push({ text: ch, zh: true }); i++; } // single char (still tappable)
+  }
+  flush();
+  return out;
+}
+
 function fetchWordInfo(word) {
   if (wordInfoCache[word]) return wordInfoCache[word];
   const p = (async () => {
@@ -1905,6 +1942,54 @@ function TappableSentence({ sentence, onTapWord, furigana = true, statusMap }) {
         : t.surface
       );
     })
+  );
+}
+
+// Renders a line of CHINESE text: segmented into words, each tappable to open
+// its CC-CEDICT definition. No furigana, no inline pinyin.
+function TappableChinese({ sentence, onTapZh }) {
+  // Wait for the Chinese dictionary to load, then segment. Without this, an early
+  // render before cedict is ready produces plain, un-tappable text.
+  const [ready, setReady] = React.useState(!!cedictData);
+  React.useEffect(() => { if (!cedictData) initCedict().then(() => setReady(true)); }, []);
+  const segs = React.useMemo(() => segmentChinese(sentence), [sentence, ready]);
+  return React.createElement('span', null,
+    segs.map((s, i) => {
+      if (!s.zh) return React.createElement('span', { key: i }, s.text);
+      // Every Chinese word is tappable (underlined), like Japanese words — even if
+      // no dictionary entry is found the popup will say so, rather than the word
+      // being silently plain text.
+      return React.createElement('span', {
+        key: i,
+        onClick: () => onTapZh && onTapZh(_cedictEntry(s.text) || { simp: s.text, pinyin: '', defs: [] }),
+        style: { cursor: 'pointer', borderBottom: `1px dotted ${C.gold}`, paddingBottom: 1 }
+      }, s.text);
+    })
+  );
+}
+
+// Read-only popup: a Chinese word's reading + meaning. No saving.
+function ChineseWordPopup({ entry, onClose }) {
+  if (!entry) return null;
+  return React.createElement('div', {
+    onClick: onClose,
+    style: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 340,
+      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 } },
+    React.createElement('div', {
+      onClick: e => e.stopPropagation(),
+      style: { background: C.paper, borderRadius: 14, padding: 20, width: '100%', maxWidth: 340 } },
+      React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' } },
+        React.createElement('div', null,
+          React.createElement('span', { style: { fontSize: 30, fontWeight: 700, color: C.ink } }, entry.simp),
+          React.createElement('span', { style: { fontSize: 16, color: C.accent, fontWeight: 600, marginLeft: 10 } }, entry.pinyin)
+        ),
+        React.createElement('button', { onClick: onClose, style: { background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: C.muted } }, '\u2715')
+      ),
+      React.createElement('div', { style: { fontSize: 11, color: C.accent, letterSpacing: 1, marginTop: 10, marginBottom: 4 } }, 'CHINESE'),
+      (entry.defs && entry.defs.length)
+        ? React.createElement('div', { style: { fontSize: 15, color: C.ink, lineHeight: 1.6 } }, entry.defs.join('; '))
+        : React.createElement('div', { style: { fontSize: 14, color: C.muted, fontStyle: 'italic' } }, 'No dictionary entry found.')
+    )
   );
 }
 
@@ -2814,7 +2899,7 @@ function AddWordForm({ onAdd, onClose, editItem, progress, masteryTarget, onRemo
 
 // -- Account screen - full page for sync ID management --------------------
 function AccountScreen({ onClose, onReset, onLogout, onExport, onDeleteAll, sessionSize, onSessionSize, masteryTarget, onMasteryTarget,
-    theme, onSetTheme, customAccent, customBase, onSetCustomColors, studyTypes, onToggleStudyType, colorWords, onToggleColorWords, reviewMastered, onToggleReviewMastered, historyN, onSetHistoryN, historyMode, onSetHistoryMode, lastSync, syncing, syncNote, onCheck, onPushToCloud, onPullFromCloud, firstRun }) {
+    theme, onSetTheme, customAccent, customBase, onSetCustomColors, studyTypes, onToggleStudyType, colorWords, onToggleColorWords, wideRead, onToggleWideRead, reviewMastered, onToggleReviewMastered, historyN, onSetHistoryN, historyMode, onSetHistoryMode, lastSync, syncing, syncNote, onCheck, onPushToCloud, onPullFromCloud, firstRun }) {
   const [userId, setUserIdState] = React.useState(getUserId());
   const [input, setInput] = React.useState('');
   const [copied, setCopied] = React.useState(false);
@@ -2987,6 +3072,21 @@ function AccountScreen({ onClose, onReset, onLogout, onExport, onDeleteAll, sess
       React.createElement('span', { style: { flexShrink: 0, width: 40, height: 23, borderRadius: 999,
         background: colorWords ? C.accent : C.line, position: 'relative', transition: 'background .15s' } },
         React.createElement('span', { style: { position: 'absolute', top: 2, left: colorWords ? 19 : 2,
+          width: 19, height: 19, borderRadius: '50%', background: 'white', transition: 'left .15s',
+          boxShadow: '0 1px 2px rgba(0,0,0,0.3)' } })
+      )
+    ),
+    React.createElement('button', { onClick: onToggleWideRead,
+      style: { display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left', width: '100%',
+        padding: '12px 14px', borderRadius: 8, cursor: 'pointer', border: `1px solid ${C.line}`,
+        background: C.card, marginBottom: 24 } },
+      React.createElement('span', { style: { flex: 1, minWidth: 0 } },
+        React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: C.ink } }, 'Wider Read layout'),
+        React.createElement('span', { style: { fontSize: 12, color: C.muted, display: 'block', marginTop: 2, lineHeight: 1.5 } }, 'uses more width for reading on large screens; no effect on phones')
+      ),
+      React.createElement('span', { style: { flexShrink: 0, width: 40, height: 23, borderRadius: 999,
+        background: wideRead ? C.accent : C.line, position: 'relative', transition: 'background .15s' } },
+        React.createElement('span', { style: { position: 'absolute', top: 2, left: wideRead ? 19 : 2,
           width: 19, height: 19, borderRadius: '50%', background: 'white', transition: 'left .15s',
           boxShadow: '0 1px 2px rgba(0,0,0,0.3)' } })
       )
@@ -3650,8 +3750,39 @@ async function fetchTatoebaExamples(word, limit) {
   }
 }
 
+// Split into paragraphs on blank lines (two or more newlines), so extra blank
+// lines in the source become real paragraph spacing. Within a paragraph, single
+// newlines are kept as line breaks. Each paragraph is an array of lines.
 function toParas(text) {
-  return (text || '').trim().split(/\n+/).map(p => p.trim()).filter(Boolean);
+  // Normalize EVERY line-break variant to \n first. Phone keyboards and pasted
+  // text can use \r\n, lone \r, or the Unicode line/paragraph separators
+  // (U+2028 / U+2029) - if we do not fold these to \n, the whole text collapses
+  // into one line. Then strip zero-width / invisible spacing-hack chars.
+  const t = (text || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/[\r\u2028\u2029\u0085]/g, '\n')
+    .replace(/[\u200b\u200e\u200f\u00a0\u3000\ufeff]/g, '')
+    .replace(/[ \t]+\n/g, '\n')   // drop trailing spaces so "blank" lines are truly empty
+    .replace(/^\n+|\n+$/g, '');   // trim leading/trailing newlines (keep internal count)
+  if (!t) return [];
+  // Walk line by line, counting blank lines between paragraphs. Each paragraph
+  // records `blanks` = how many blank lines preceded it (0 for the first), so the
+  // renderer can add space proportional to how much the user typed.
+  const out = [];
+  let cur = null;      // current paragraph's lines
+  let blanks = 0;      // blank lines seen since the last non-blank line
+  for (const rawLine of t.split('\n')) {
+    const line = rawLine.trim();
+    if (!line) { blanks++; continue; }
+    if (cur && blanks === 0) {
+      cur.lines.push(line);           // same paragraph, line break within it
+    } else {
+      cur = { lines: [line], blanks: out.length === 0 ? 0 : blanks };
+      out.push(cur);
+    }
+    blanks = 0;
+  }
+  return out;   // [{ lines:[...], blanks:N }, ...]
 }
 
 // Last-sync label: relative for recent, explicit date+time otherwise.
@@ -3687,14 +3818,78 @@ function timeAgo(ts) {
 
 // Renders processed text: furigana, tappable words, colour-coding. Unchanged
 // behaviour, reused by the Read view and by saved library items.
+// Split a line into inline runs, honoring **bold** markers. Returns an array of
+// React nodes where bold spans wrap a (still word-tappable) inner renderer.
+function renderInline(text, renderRun, keyBase) {
+  const parts = [];
+  const re = /\*\*([^*]+)\*\*/g;
+  let last = 0, m, k = 0;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) parts.push(renderRun(text.slice(last, m.index), `${keyBase}-${k++}`, false));
+    parts.push(renderRun(m[1], `${keyBase}-${k++}`, true));
+    last = re.lastIndex;
+  }
+  if (last < text.length) parts.push(renderRun(text.slice(last), `${keyBase}-${k++}`, false));
+  return parts.length ? parts : [renderRun(text, `${keyBase}-0`, false)];
+}
+
 function ProcessedText({ paras, onTapWord }) {
-  return React.createElement('div', { style: { background: C.card, border: `1px solid ${C.line}`,
-    borderRadius: 10, padding: '18px 16px', display: 'flex', flexDirection: 'column', gap: 14 } },
-    paras.map((para, i) =>
-      React.createElement('div', { key: i, style: { fontSize: 18, lineHeight: 2.4, color: C.ink } },
-        React.createElement(TappableSentence, { sentence: para, onTapWord })
+  const [zhEntry, setZhEntry] = React.useState(null); // tapped Chinese word
+  // Normalize to the { lines, blanks } shape, tolerating older shapes defensively.
+  const blocks = (paras || []).map(p =>
+    Array.isArray(p) ? { lines: p, blanks: 1 }
+    : (p && p.lines) ? p
+    : { lines: [p], blanks: 1 });
+  const BASE_GAP = 44;   // one blank line's worth
+  const EXTRA = 28;      // per blank line beyond the first
+
+  // Render one line, interpreting markdown (# heading, **bold**) and the Chinese
+  // prefix "zh> ". Japanese text is word-tappable; Chinese text uses the Chinese
+  // segmenter + dictionary.
+  const renderLine = (rawLine, key) => {
+    let line = rawLine;
+    // Heading: leading # (or ##) -> larger, bolder.
+    const hMatch = /^(#{1,3})\s+(.*)$/.exec(line);
+    const isHeading = !!hMatch;
+    let headingLevel = 0;
+    if (isHeading) { headingLevel = hMatch[1].length; line = hMatch[2]; }
+    // Chinese line prefix.
+    const isZh = /^zh>\s?/.test(line);
+    if (isZh) line = line.replace(/^zh>\s?/, '');
+
+    const headStyle = isHeading ? {
+      fontSize: headingLevel === 1 ? 24 : (headingLevel === 2 ? 21 : 19),
+      fontWeight: 700, lineHeight: 1.5, margin: '2px 0'
+    } : null;
+
+    let inner;
+    if (isZh) {
+      // Chinese: bold markers still apply, each run segmented + tappable.
+      inner = renderInline(line, (txt, k, bold) =>
+        React.createElement(bold ? 'strong' : 'span', { key: k },
+          React.createElement(TappableChinese, { sentence: txt, onTapZh: setZhEntry })
+        ), key);
+    } else {
+      inner = renderInline(line, (txt, k, bold) =>
+        React.createElement(bold ? 'strong' : 'span', { key: k },
+          React.createElement(TappableSentence, { sentence: txt, onTapWord })
+        ), key);
+    }
+    return React.createElement('div', { key, style: headStyle || undefined }, inner);
+  };
+
+  return React.createElement(React.Fragment, null,
+    React.createElement('div', { style: { background: C.card, border: `1px solid ${C.line}`,
+      borderRadius: 10, padding: '18px 16px', display: 'flex', flexDirection: 'column' } },
+      blocks.map((blk, i) =>
+        React.createElement('div', { key: i, style: {
+          fontSize: 18, lineHeight: 2.4, color: C.ink,
+          marginTop: i === 0 ? 0 : BASE_GAP + Math.max(0, (blk.blanks || 1) - 1) * EXTRA } },
+          blk.lines.map((line, j) => renderLine(line, `${i}-${j}`))
+        )
       )
-    )
+    ),
+    zhEntry && React.createElement(ChineseWordPopup, { entry: zhEntry, onClose: () => setZhEntry(null) })
   );
 }
 
@@ -3745,6 +3940,47 @@ function ReadMode({ onTapWord, raw, setRaw, processed, setProcessed,
   const [eTopic, setETopic] = useState('');
   const [eText, setEText] = useState('');
   const [eNewTopic, setENewTopic] = useState('');
+  const textareaRef = React.useRef(null);
+
+  // -- Formatting toolbar actions (operate on the textarea selection) --------
+  // Wrap the current selection with a marker pair (e.g. ** for bold). If nothing
+  // is selected, insert the markers and place the cursor between them.
+  const wrapSelection = (before, after) => {
+    const ta = textareaRef.current; if (!ta) return;
+    const s = ta.selectionStart, e = ta.selectionEnd;
+    const val = ta.value;
+    const sel = val.slice(s, e);
+    const next = val.slice(0, s) + before + sel + after + val.slice(e);
+    setEText(next);
+    // Restore a sensible selection/cursor after React re-renders.
+    requestAnimationFrame(() => {
+      const y = window.scrollY;
+      ta.focus({ preventScroll: true });
+      if (sel) { ta.setSelectionRange(s + before.length, e + before.length); }
+      else { const pos = s + before.length; ta.setSelectionRange(pos, pos); }
+      window.scrollTo(0, y);
+    });
+  };
+  // Prefix each selected line (or the current line) with `prefix`, or toggle it
+  // off if all selected lines already have it. Used for headings and Chinese.
+  const toggleLinePrefix = (prefix) => {
+    const ta = textareaRef.current; if (!ta) return;
+    const val = ta.value;
+    let s = ta.selectionStart, e = ta.selectionEnd;
+    // expand to full lines
+    const lineStart = val.lastIndexOf('\n', s - 1) + 1;
+    let lineEnd = val.indexOf('\n', e); if (lineEnd === -1) lineEnd = val.length;
+    const block = val.slice(lineStart, lineEnd);
+    const lines = block.split('\n');
+    const allHave = lines.every(l => l.startsWith(prefix) || l.trim() === '');
+    const newLines = lines.map(l => {
+      if (l.trim() === '') return l;
+      return allHave ? l.slice(prefix.length) : prefix + l;
+    });
+    const next = val.slice(0, lineStart) + newLines.join('\n') + val.slice(lineEnd);
+    setEText(next);
+    requestAnimationFrame(() => { const y = window.scrollY; ta.focus({ preventScroll: true }); ta.setSelectionRange(lineStart, lineStart + newLines.join('\n').length); window.scrollTo(0, y); });
+  };
 
   const topics = libraryTopics(library);
   const openItem = library.find(it => it.id === openId) || null;
@@ -3907,10 +4143,25 @@ function ReadMode({ onTapWord, raw, setRaw, processed, setProcessed,
           ),
       header,
       editing
-        ? React.createElement('textarea', { value: eText, onChange: e => setEText(e.target.value),
-            style: { width: '100%', minHeight: 180, padding: 14, borderRadius: 10, border: `1px solid ${C.line}`,
-              fontSize: 16, lineHeight: 1.7, resize: 'vertical', outline: 'none', boxSizing: 'border-box',
-              background: C.card, color: C.ink } })
+        ? React.createElement('div', null,
+            // Formatting toolbar: simple icon buttons like a doc editor.
+            React.createElement('div', { style: { display: 'flex', gap: 6, marginBottom: 8, justifyContent: 'center' } },
+              [['B', 'Bold', () => wrapSelection('**', '**'), { fontWeight: 800 }],
+               ['H', 'Heading', () => toggleLinePrefix('# '), { fontWeight: 700 }],
+               ['中', 'Mark as Chinese', () => toggleLinePrefix('zh> '), { fontWeight: 600 }]
+              ].map(([label, title, fn, extra]) =>
+                React.createElement('button', { key: title, title, type: 'button',
+                  onMouseDown: (e) => e.preventDefault(),  // keep textarea focus/scroll
+                  onClick: (e) => { e.preventDefault(); fn(); },
+                  style: { width: 30, height: 28, borderRadius: 6, border: `1px solid ${C.line}`,
+                    background: C.card, color: C.ink, cursor: 'pointer', fontSize: 13, ...(extra || {}) } }, label)
+              )
+            ),
+            React.createElement('textarea', { ref: textareaRef, value: eText, onChange: e => setEText(e.target.value),
+              style: { width: '100%', minHeight: 180, padding: 14, borderRadius: 10, border: `1px solid ${C.line}`,
+                fontSize: 16, lineHeight: 1.7, resize: 'vertical', outline: 'none', boxSizing: 'border-box',
+                background: C.card, color: C.ink } })
+          )
         : React.createElement(ProcessedText, { paras: toParas(openItem.text), onTapWord })
     );
   }
@@ -4111,6 +4362,8 @@ function App() {
     return next;
   });
   const [colorWords, setColorWordsState] = useState(() => localStorage.getItem(COLOR_WORDS_KEY) === 'on');
+  const [wideRead, setWideReadState] = useState(() => localStorage.getItem(WIDE_READ_KEY) === 'on');
+  const toggleWideRead = () => setWideReadState(v => { const next = !v; try { localStorage.setItem(WIDE_READ_KEY, next ? 'on' : 'off'); } catch {} return next; });
   const [reviewMastered, setReviewMasteredState] = useState(() => localStorage.getItem(REVIEW_MASTERED_KEY) === 'on');
   const [reviewId, setReviewId] = useState(null); // mastered word currently surfaced for review
   const toggleReviewMastered = () => setReviewMasteredState(v => { const next = !v; try { localStorage.setItem(REVIEW_MASTERED_KEY, next ? 'on' : 'off'); } catch {} return next; });
@@ -4694,6 +4947,7 @@ function App() {
       studyTypes, onToggleStudyType:toggleStudyType,
       reviewMastered, onToggleReviewMastered:toggleReviewMastered,
       colorWords, onToggleColorWords:toggleColorWords,
+      wideRead, onToggleWideRead:toggleWideRead,
       historyN, onSetHistoryN:setHistoryN, historyMode, onSetHistoryMode:setHistoryMode,
       firstRun: !items }));
 
@@ -4805,7 +5059,7 @@ function App() {
       onMarkMastered:()=>{ markMastered(editWordTarget.id); setEditWordTarget(null); advanceDeck(); },
       onTapWord:setWordPopup, library,
       onOpenText:(textId)=>{ setEditWordTarget(null); setReadOpenId(textId); setReadView('item'); setMode('read'); } }),
-    React.createElement('div', { style:{ maxWidth:420, margin:'0 auto', padding:20, minHeight:'calc(100vh - 60px)' } },
+    React.createElement('div', { style:{ maxWidth:(wideRead && mode==='read') ? 900 : 420, margin:'0 auto', padding:20, minHeight:'calc(100vh - 60px)', transition:'max-width .15s' } },
       mode==='study' && (deckEmpty
         ? React.createElement('div', { style:{ textAlign:'center', color:C.muted, padding:'40px 20px' } }, 'No active words. Add some in the Words tab.')
         : React.createElement(StudyMode, { items: reviewItem ? [reviewItem] : deck, progress, idx: reviewItem ? 0 : Math.min(deckIdx, deck.length-1), onAdvance:advanceDeck, onAnswer:handleAnswer, onCurrentWord:(id)=>{currentWordRef.current=id;}, onTapKanji:setKanjiPopup, onTapWord:setWordPopup, onEditWord:setEditWordTarget, furigana, onToggleFurigana:toggleFurigana, showStrokes, onToggleStrokes:toggleStrokes, showSentence, onToggleSentence:toggleSentence, studyTypes, pickRef:studyPickRef, isReview: !!reviewItem, onAddToStudying:()=>addToStudying(reviewItem.id), onContinueReview:continueReview })),
