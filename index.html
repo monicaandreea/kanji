@@ -1188,7 +1188,7 @@ function initCedict() {
     let db = null;
     try { db = await idbOpen(); } catch {}
     if (db) {
-      const cached = await idbGet(db, 'cedict-v1');
+      const cached = await idbGet(db, 'cedict-v2');
       if (cached && cached.simp) { cedictData = cached; return true; }
     }
     try {
@@ -1196,7 +1196,7 @@ function initCedict() {
       if (!res.ok) throw new Error('no cedict');
       const json = await res.json();
       cedictData = json;
-      if (db) { idbSet(db, 'cedict-v1', json); }
+      if (db) { idbSet(db, 'cedict-v2', json); }
       return true;
     } catch (e) { cedictData = { simp: {}, meaning: {} }; return false; }
   })();
@@ -1255,18 +1255,31 @@ function chineseFor(jpWord, meanings) {
 // not. Returns { word, reading, meanings } or null.
 function japaneseFor(simp, trad) {
   if (!jmdictIndex) return null;
-  const tryForm = (form) => {
+  const tryForm = (form, maxMeanings) => {
     if (!form) return null;
     const entries = jmdictIndex[form];
     if (!entries || !entries.length) return null;
-    // Prefer an entry whose kanji form exactly equals what we looked up.
     const e = entries.find(x => (x.kanji || []).includes(form)) || entries[0];
     const meanings = [];
-    (e.senses || []).forEach(s => (s.glosses || []).forEach(g => { if (meanings.length < 5) meanings.push(g); }));
+    (e.senses || []).forEach(s => (s.glosses || []).forEach(g => { if (meanings.length < (maxMeanings || 5)) meanings.push(g); }));
     if (!meanings.length) return null;
     return { word: form, reading: e.reading || '', meanings };
   };
-  return tryForm(simp) || tryForm(trad) || null;
+  // 1. Whole-word match (simplified, then traditional).
+  const whole = tryForm(simp, 5) || tryForm(trad, 5);
+  if (whole) return { whole };
+  // 2. Fallback: look up each character individually (simp char, else its
+  //    traditional counterpart). Useful for Chinese words whose characters are
+  //    familiar from Japanese even if the whole word isn't a Japanese word.
+  const sChars = [...(simp || '')];
+  const tChars = [...(trad || '')];
+  const chars = [];
+  sChars.forEach((ch, i) => {
+    if (!isHanChar(ch)) return;
+    const hit = tryForm(ch, 2) || (tChars[i] ? tryForm(tChars[i], 2) : null);
+    if (hit) chars.push(hit);
+  });
+  return chars.length ? { chars } : null;
 }
 
 // --- Chinese text segmentation (longest-match against CC-CEDICT) ------------
@@ -2014,12 +2027,25 @@ function ChineseWordPopup({ entry, onClose }) {
         ? React.createElement('div', { style: { fontSize: 15, color: C.ink, lineHeight: 1.6 } }, entry.defs.join('; '))
         : React.createElement('div', { style: { fontSize: 14, color: C.muted, fontStyle: 'italic' } }, 'No dictionary entry found.'),
       jp && React.createElement('div', { style: { marginTop: 14, paddingTop: 12, borderTop: `1px solid ${C.line}` } },
-        React.createElement('div', { style: { fontSize: 11, color: C.gold, letterSpacing: 1, marginBottom: 4 } }, 'JAPANESE'),
-        React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' } },
-          React.createElement('span', { style: { fontSize: 18, fontWeight: 700, color: C.ink } }, jp.word),
-          jp.reading && React.createElement('span', { style: { fontSize: 13, color: C.muted } }, jp.reading)
-        ),
-        React.createElement('div', { style: { fontSize: 14, color: C.ink, marginTop: 2, lineHeight: 1.5 } }, jp.meanings.join('; '))
+        React.createElement('div', { style: { fontSize: 11, color: C.gold, letterSpacing: 1, marginBottom: 4 } },
+          jp.whole ? 'JAPANESE' : 'JAPANESE (by character)'),
+        jp.whole
+          ? React.createElement('div', null,
+              React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' } },
+                React.createElement('span', { style: { fontSize: 18, fontWeight: 700, color: C.ink } }, jp.whole.word),
+                jp.whole.reading && React.createElement('span', { style: { fontSize: 13, color: C.muted } }, jp.whole.reading)
+              ),
+              React.createElement('div', { style: { fontSize: 14, color: C.ink, marginTop: 2, lineHeight: 1.5 } }, jp.whole.meanings.join('; '))
+            )
+          : React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+              jp.chars.map((c, i) => React.createElement('div', { key: i },
+                React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' } },
+                  React.createElement('span', { style: { fontSize: 17, fontWeight: 700, color: C.ink } }, c.word),
+                  c.reading && React.createElement('span', { style: { fontSize: 12, color: C.muted } }, c.reading)
+                ),
+                React.createElement('div', { style: { fontSize: 13, color: C.ink, marginTop: 1, lineHeight: 1.4 } }, c.meanings.join('; '))
+              ))
+            )
       )
     )
   );
