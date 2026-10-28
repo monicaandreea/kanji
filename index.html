@@ -2054,9 +2054,9 @@ function ChineseWordPopup({ entry, onClose, onOpenDict, inUserDict }) {
   const dictBtn = (word) => (onOpenDict && inUserDict && inUserDict(word)) ? React.createElement('button', {
     onClick: () => onOpenDict(word), title: 'Open in Dictionary',
     style: { marginLeft: 'auto', background: 'none', border: 'none', color: C.accent,
-      fontSize: 17, cursor: 'pointer', padding: '2px 4px', flexShrink: 0, lineHeight: 1,
-      display: 'inline-flex', alignItems: 'center', gap: 2 } },
-    '🕮', React.createElement('span', { style: { fontSize: 14 } }, '→')) : null;
+      fontSize: 15, cursor: 'pointer', padding: '2px 4px', flexShrink: 0, lineHeight: 1,
+      display: 'inline-flex', alignItems: 'center', gap: 3 } },
+    '▤', React.createElement('span', { style: { fontSize: 14 } }, '→')) : null;
   return React.createElement('div', {
     onClick: onClose,
     style: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 340,
@@ -4409,9 +4409,13 @@ function KanjiMode({ items, onTapWord, onEditWord, onPopupKanji, search: searchP
   // Detail view for a single kanji
   if (selected) {
     const words = [...(kanjiMap[selected] || [])].sort((a, b) => compareReading(a, b));
+    // If we were sent straight here from a text (single-kanji lookup), "back"
+    // returns to that text directly rather than dropping onto the dictionary grid.
+    const cameFromText = !!returnTo;
     return React.createElement('div', { style:{ display:'flex', flexDirection:'column', gap:16 } },
-      React.createElement('button', { onClick:backToGrid,
-        style:{ ...btn(C.card,C.ink), border:`1px solid ${C.line}`, flex:'unset', alignSelf:'flex-start', padding:'6px 14px' } }, '← Back'),
+      React.createElement('button', { onClick: cameFromText ? onReturn : backToGrid,
+        style:{ ...btn(C.card,C.ink), border:`1px solid ${C.line}`, flex:'unset', alignSelf:'flex-start', padding:'6px 14px' } },
+        cameFromText ? '← Back to text' : '← Back'),
       React.createElement('div', { style:{ background:C.card, borderRadius:10, border:`1px solid ${C.line}`, padding:18 } },
         React.createElement(KanjiInfoCard, { char:selected })
       ),
