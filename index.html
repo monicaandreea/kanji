@@ -1274,16 +1274,18 @@ function japaneseFor(simp, trad) {
   // 1. Whole-word match (simplified, then traditional).
   const whole = tryForm(simp, 5) || tryForm(trad, 5);
   if (whole) return { whole };
-  // 2. Fallback: look up each character individually (simp char, else its
-  //    traditional counterpart). Useful for Chinese words whose characters are
-  //    familiar from Japanese even if the whole word isn't a Japanese word.
+  // 2. Fallback: each character individually. JMdict catches characters that are
+  //    also standalone Japanese words (山 "mountain"); for the rest (去, only used
+  //    in compounds) we leave a placeholder for the popup to fill from kanjiapi.
   const sChars = [...(simp || '')];
   const tChars = [...(trad || '')];
   const chars = [];
   sChars.forEach((ch, i) => {
     if (!isHanChar(ch)) return;
     const hit = tryForm(ch, 2) || (tChars[i] ? tryForm(tChars[i], 2) : null);
-    if (hit) chars.push(hit);
+    // Keep the character even on a miss, so the popup can fetch it live. We record
+    // both the simplified char and its traditional counterpart to try.
+    chars.push(hit || { word: ch, trad: (tChars[i] && tChars[i] !== ch) ? tChars[i] : null, reading: '', meanings: null, pending: true });
   });
   return chars.length ? { chars } : null;
 }
@@ -2011,8 +2013,40 @@ function TappableChinese({ sentence, onTapZh }) {
 // Read-only popup: a Chinese word's reading + meaning, plus the Japanese meaning
 // of the same characters when they exist as a Japanese word. No saving.
 function ChineseWordPopup({ entry, onClose, onOpenDict }) {
+  // Resolve any character-level Japanese misses from kanjiapi.dev (live), merging
+  // the results in so single kanji like 去 (not a JMdict word) still get a meaning.
+  const [charFills, setCharFills] = React.useState({});
+  React.useEffect(() => {
+    if (!entry) return;
+    const base = japaneseFor(entry.simp, entry.trad);
+    if (!base || !base.chars) return;
+    let alive = true;
+    base.chars.forEach(c => {
+      if (!c.pending) return;
+      const forms = [c.word, c.trad].filter(Boolean);
+      (async () => {
+        for (const f of forms) {
+          const info = await fetchKanjiInfo(f);
+          if (info && info.meanings && info.meanings.length) {
+            if (!alive) return;
+            setCharFills(prev => ({ ...prev, [c.word]: {
+              word: f, reading: (info.kun_readings || []).concat(info.on_readings || []).slice(0, 2).join('、'),
+              meanings: info.meanings.slice(0, 3)
+            } }));
+            return;
+          }
+        }
+      })();
+    });
+    return () => { alive = false; };
+  }, [entry && entry.simp, entry && entry.trad]);
   if (!entry) return null;
-  const jp = japaneseFor(entry.simp, entry.trad);
+  let jp = japaneseFor(entry.simp, entry.trad);
+  // Merge in any live-fetched character meanings; drop chars still unresolved.
+  if (jp && jp.chars) {
+    const merged = jp.chars.map(c => c.pending ? (charFills[c.word] || null) : c).filter(Boolean);
+    jp = merged.length ? { chars: merged } : null;
+  }
   const showTrad = entry.trad && entry.trad !== entry.simp;
   // Small "open in Dictionary" button shown next to a Japanese word.
   const dictBtn = (word) => onOpenDict && React.createElement('button', {
@@ -4247,9 +4281,9 @@ function ReadMode({ onTapWord, raw, setRaw, processed, setProcessed,
           ),
       header,
       editing
-        ? React.createElement('div', null,
+        ? React.createElement('div', { style: { display: 'flex', flexDirection: 'column', minHeight: 'calc(100vh - 220px)' } },
             // Formatting toolbar: simple icon buttons like a doc editor.
-            React.createElement('div', { style: { display: 'flex', gap: 6, marginBottom: 8, justifyContent: 'center' } },
+            React.createElement('div', { style: { display: 'flex', gap: 6, marginBottom: 8, justifyContent: 'center', flexShrink: 0 } },
               [['B', 'Bold', () => wrapSelection('**', '**'), { fontWeight: 800 }],
                ['H', 'Heading', () => toggleLinePrefix('# '), { fontWeight: 700 }],
                ['\u4e2d', 'Mark as Chinese', () => toggleLinePrefix('zh> '), { fontWeight: 600 }],
@@ -4267,8 +4301,8 @@ function ReadMode({ onTapWord, raw, setRaw, processed, setProcessed,
               )
             ),
             React.createElement('textarea', { ref: textareaRef, value: eText, onChange: e => setEText(e.target.value),
-              style: { width: '100%', minHeight: 180, padding: 14, borderRadius: 10, border: `1px solid ${C.line}`,
-                fontSize: 16, lineHeight: 1.7, resize: 'vertical', outline: 'none', boxSizing: 'border-box',
+              style: { width: '100%', flex: 1, minHeight: 180, padding: 14, borderRadius: 10, border: `1px solid ${C.line}`,
+                fontSize: 16, lineHeight: 1.7, resize: 'none', outline: 'none', boxSizing: 'border-box',
                 background: C.card, color: C.ink } })
           )
         : React.createElement(ProcessedText, { paras: toParas(openItem.text), onTapWord, onOpenDict, baseSize })
