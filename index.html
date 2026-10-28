@@ -2012,7 +2012,7 @@ function TappableChinese({ sentence, onTapZh }) {
 
 // Read-only popup: a Chinese word's reading + meaning, plus the Japanese meaning
 // of the same characters when they exist as a Japanese word. No saving.
-function ChineseWordPopup({ entry, onClose, onOpenDict }) {
+function ChineseWordPopup({ entry, onClose, onOpenDict, inUserDict }) {
   // Resolve any character-level Japanese misses from kanjiapi.dev (live), merging
   // the results in so single kanji like 去 (not a JMdict word) still get a meaning.
   const [charFills, setCharFills] = React.useState({});
@@ -2049,10 +2049,14 @@ function ChineseWordPopup({ entry, onClose, onOpenDict }) {
   }
   const showTrad = entry.trad && entry.trad !== entry.simp;
   // Small "open in Dictionary" button shown next to a Japanese word.
-  const dictBtn = (word) => onOpenDict && React.createElement('button', {
+  // Only show when the word (or one of its kanji) is in the user's saved words,
+  // so tapping never lands on an empty dictionary. Simple book glyph + arrow.
+  const dictBtn = (word) => (onOpenDict && inUserDict && inUserDict(word)) ? React.createElement('button', {
     onClick: () => onOpenDict(word), title: 'Open in Dictionary',
-    style: { background: 'none', border: `1px solid ${C.line}`, borderRadius: 6, color: C.accent,
-      fontSize: 11, fontWeight: 600, cursor: 'pointer', padding: '2px 8px', flexShrink: 0 } }, 'Dictionary');
+    style: { marginLeft: 'auto', background: 'none', border: 'none', color: C.accent,
+      fontSize: 17, cursor: 'pointer', padding: '2px 4px', flexShrink: 0, lineHeight: 1,
+      display: 'inline-flex', alignItems: 'center', gap: 2 } },
+    '🕮', React.createElement('span', { style: { fontSize: 14 } }, '→')) : null;
   return React.createElement('div', {
     onClick: onClose,
     style: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 340,
@@ -3954,7 +3958,7 @@ function renderInline(text, renderRun, keyBase) {
   return parts.length ? parts : [renderRun(text, `${keyBase}-0`, false)];
 }
 
-function ProcessedText({ paras, onTapWord, onOpenDict, baseSize }) {
+function ProcessedText({ paras, onTapWord, onOpenDict, inUserDict, baseSize }) {
   const BASE = baseSize || 18;  // base font size; headings scale from it
   const [zhEntry, setZhEntry] = React.useState(null); // tapped Chinese word
   // Normalize to the { lines, blanks } shape, tolerating older shapes defensively.
@@ -4027,7 +4031,7 @@ function ProcessedText({ paras, onTapWord, onOpenDict, baseSize }) {
         )
       )
     ),
-    zhEntry && React.createElement(ChineseWordPopup, { entry: zhEntry, onClose: () => setZhEntry(null), onOpenDict })
+    zhEntry && React.createElement(ChineseWordPopup, { entry: zhEntry, onClose: () => setZhEntry(null), onOpenDict, inUserDict })
   );
 }
 
@@ -4070,7 +4074,7 @@ function ReadSaveDialog({ topics, initial, onCancel, onSave }) {
 
 function ReadMode({ onTapWord, raw, setRaw, processed, setProcessed,
     library, history, historyN, onSaveToLibrary, onUpdateLibrary, onDeleteLibrary,
-    onDeleteHistory, onClearHistory, onLoadFromHistory, onPushHistory, onStudyFromText, onOpenDict, baseSize,
+    onDeleteHistory, onClearHistory, onLoadFromHistory, onPushHistory, onStudyFromText, onOpenDict, inUserDict, baseSize,
     view, setView, openId, setOpenId, topicFilter, setTopicFilter }) {
   const [showSave, setShowSave] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -4305,7 +4309,7 @@ function ReadMode({ onTapWord, raw, setRaw, processed, setProcessed,
                 fontSize: 16, lineHeight: 1.7, resize: 'none', outline: 'none', boxSizing: 'border-box',
                 background: C.card, color: C.ink } })
           )
-        : React.createElement(ProcessedText, { paras: toParas(openItem.text), onTapWord, onOpenDict, baseSize })
+        : React.createElement(ProcessedText, { paras: toParas(openItem.text), onTapWord, onOpenDict, inUserDict, baseSize })
     );
   }
 
@@ -4317,7 +4321,7 @@ function ReadMode({ onTapWord, raw, setRaw, processed, setProcessed,
         smallBtn('Edit', reset, { color: C.ink }),
         smallBtn('Clear', clearAll)
       ),
-      React.createElement(ProcessedText, { paras: processed, onTapWord, onOpenDict, baseSize }),
+      React.createElement(ProcessedText, { paras: processed, onTapWord, onOpenDict, inUserDict, baseSize }),
       showSave && React.createElement(ReadSaveDialog, { topics, onCancel: () => setShowSave(false),
         onSave: (meta) => {
           const newId = onSaveToLibrary({ ...meta, text: raw.trim() });
@@ -4354,7 +4358,7 @@ function ReadMode({ onTapWord, raw, setRaw, processed, setProcessed,
 }
 
 // -- Kanji dictionary tab -------------------------------------------------
-function KanjiMode({ items, onTapWord, onEditWord, onPopupKanji, search: searchProp, setSearch: setSearchProp, returnTo, onReturn }) {
+function KanjiMode({ items, onTapWord, onEditWord, onPopupKanji, search: searchProp, setSearch: setSearchProp, returnTo, onReturn, openKanjiChar, onOpenKanjiDone }) {
   // Search can be controlled from App (so other screens can open the dictionary
   // pre-loaded with a word); fall back to local state if not provided.
   const [searchLocal, setSearchLocal] = useState('');
@@ -4366,6 +4370,11 @@ function KanjiMode({ items, onTapWord, onEditWord, onPopupKanji, search: searchP
   // Remember scroll position when opening a detail; restore it when going back.
   const openKanji = (k) => { scrollRef.current = window.scrollY; setSelected(k); window.scrollTo(0, 0); };
   const backToGrid = () => { setSelected(null); requestAnimationFrame(() => window.scrollTo(0, scrollRef.current)); };
+  // Auto-open a kanji's entry when asked from outside (the "open in dictionary"
+  // button on a single-kanji word).
+  React.useEffect(() => {
+    if (openKanjiChar) { setSelected(openKanjiChar); window.scrollTo(0, 0); onOpenKanjiDone && onOpenKanjiDone(); }
+  }, [openKanjiChar]);
 
   // Build map: kanji char -> list of words containing it
   const kanjiMap = React.useMemo(() => {
@@ -4543,13 +4552,35 @@ function App() {
   const [readOpenId, setReadOpenId] = useState(null);
   const [readTopicFilter, setReadTopicFilter] = useState(null);
   const [dictSearch, setDictSearch] = useState('');
+  const [dictOpenKanji, setDictOpenKanji] = useState(null); // kanji to open directly in the Dictionary
   // Where a dictionary lookup was launched from, so "back" can return there.
   const dictReturnRef = React.useRef(null);
   // Open the Dictionary tab pre-loaded with a word; remember where we came from.
+  // True if the word, or any of its kanji, appears in the user's saved words.
+  const inUserDict = (word) => {
+    if (!items || !items.length) return false;
+    const w = (word || '').trim();
+    if (!w) return false;
+    if (items.some(it => it.word === w)) return true;
+    const kset = new Set();
+    items.forEach(it => uniqueKanji(it.word).forEach(k => kset.add(k)));
+    return uniqueKanji(w).some(k => kset.has(k));
+  };
   const openDictionaryFor = (word) => {
     dictReturnRef.current = { mode, readView, readOpenId };
     setWordPopup(null); setKanjiPopup && setKanjiPopup(null);
-    setDictSearch(word);
+    const kanji = uniqueKanji(word);
+    // A single-kanji word opens that kanji's entry directly; anything longer uses
+    // search. Only open a kanji directly if it's actually in the user's words.
+    const kset = new Set();
+    items.forEach(it => uniqueKanji(it.word).forEach(k => kset.add(k)));
+    if (kanji.length === 1 && kset.has(kanji[0])) {
+      setDictOpenKanji(kanji[0]);
+      setDictSearch('');
+    } else {
+      setDictOpenKanji(null);
+      setDictSearch(word);
+    }
     setMode('kanji');
   };
   const returnFromDictionary = () => {
@@ -5240,10 +5271,10 @@ function App() {
         library, history, historyN,
         onSaveToLibrary:saveToLibrary, onUpdateLibrary:updateLibrary, onDeleteLibrary:deleteLibrary,
         onDeleteHistory:deleteHistory, onClearHistory:clearHistory,
-        onLoadFromHistory:loadFromHistory, onPushHistory:pushHistory, onStudyFromText:studyFromText, onOpenDict:openDictionaryFor, baseSize:readSize,
+        onLoadFromHistory:loadFromHistory, onPushHistory:pushHistory, onStudyFromText:studyFromText, onOpenDict:openDictionaryFor, inUserDict, baseSize:readSize,
         view:readView, setView:setReadView, openId:readOpenId, setOpenId:setReadOpenId,
         topicFilter:readTopicFilter, setTopicFilter:setReadTopicFilter }),
-      mode==='kanji' && React.createElement(KanjiMode, { items, onEditWord:setEditWordTarget, onPopupKanji:setKanjiPopup, search:dictSearch, setSearch:setDictSearch, returnTo:dictReturnRef.current, onReturn:returnFromDictionary })
+      mode==='kanji' && React.createElement(KanjiMode, { items, onEditWord:setEditWordTarget, onPopupKanji:setKanjiPopup, search:dictSearch, setSearch:setDictSearch, returnTo:dictReturnRef.current, onReturn:returnFromDictionary, openKanjiChar:dictOpenKanji, onOpenKanjiDone:()=>setDictOpenKanji(null) })
     ),
     (mode==='words' || mode==='read' || mode==='kanji') && React.createElement(BackToTop, null)
   );
