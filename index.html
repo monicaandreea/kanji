@@ -4330,7 +4330,7 @@ function ReadMode({ onTapWord, raw, setRaw, processed, setProcessed,
             ),
             React.createElement('textarea', { ref: textareaRef, value: eText, onChange: e => setEText(e.target.value),
               style: { width: '100%', flex: 1, minHeight: 180, padding: 14, borderRadius: 10, border: `1px solid ${C.line}`,
-                fontSize: 16, lineHeight: 1.7, resize: 'none', outline: 'none', boxSizing: 'border-box',
+                fontSize: 16, lineHeight: 1.7, resize: 'vertical', outline: 'none', boxSizing: 'border-box',
                 background: C.card, color: C.ink } })
           )
         : React.createElement(ProcessedText, { paras: toParas(openItem.text), onTapWord, onOpenDict, inUserDict, baseSize })
