@@ -1214,7 +1214,7 @@ function _cleanGloss(g) {
 function _cedictEntry(simp) {
   const row = cedictData && cedictData.simp[simp];
   if (!row) return null;
-  return { simp, pinyin: row[0], defs: row[1] };
+  return { simp, pinyin: row[0], defs: row[1], trad: row[2] || '' };
 }
 // Look up the Chinese for a Japanese word. Returns { same, pivot: [...] }.
 // `same` = the exact-characters Chinese entry (reliable) or null.
@@ -1247,6 +1247,26 @@ function chineseFor(jpWord, meanings) {
   const ranked = Object.values(scored).sort((a, b) => a[0] - b[0]).map(x => x[1]);
   const pivot = ranked.slice(0, 2);
   return { same, pivot };
+}
+
+// Given a Chinese word's simplified and traditional forms, find the matching
+// Japanese word in JMdict (character-only, exact). Japanese shinjitai descends
+// from traditional forms, so the traditional often matches when simplified does
+// not. Returns { word, reading, meanings } or null.
+function japaneseFor(simp, trad) {
+  if (!jmdictIndex) return null;
+  const tryForm = (form) => {
+    if (!form) return null;
+    const entries = jmdictIndex[form];
+    if (!entries || !entries.length) return null;
+    // Prefer an entry whose kanji form exactly equals what we looked up.
+    const e = entries.find(x => (x.kanji || []).includes(form)) || entries[0];
+    const meanings = [];
+    (e.senses || []).forEach(s => (s.glosses || []).forEach(g => { if (meanings.length < 5) meanings.push(g); }));
+    if (!meanings.length) return null;
+    return { word: form, reading: e.reading || '', meanings };
+  };
+  return tryForm(simp) || tryForm(trad) || null;
 }
 
 // --- Chinese text segmentation (longest-match against CC-CEDICT) ------------
@@ -1968,27 +1988,39 @@ function TappableChinese({ sentence, onTapZh }) {
   );
 }
 
-// Read-only popup: a Chinese word's reading + meaning. No saving.
+// Read-only popup: a Chinese word's reading + meaning, plus the Japanese meaning
+// of the same characters when they exist as a Japanese word. No saving.
 function ChineseWordPopup({ entry, onClose }) {
   if (!entry) return null;
+  const jp = japaneseFor(entry.simp, entry.trad);
+  const showTrad = entry.trad && entry.trad !== entry.simp;
   return React.createElement('div', {
     onClick: onClose,
     style: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 340,
       display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 } },
     React.createElement('div', {
       onClick: e => e.stopPropagation(),
-      style: { background: C.paper, borderRadius: 14, padding: 20, width: '100%', maxWidth: 340 } },
+      style: { background: C.paper, borderRadius: 14, padding: 20, width: '100%', maxWidth: 340, maxHeight: '80vh', overflowY: 'auto' } },
       React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' } },
         React.createElement('div', null,
           React.createElement('span', { style: { fontSize: 30, fontWeight: 700, color: C.ink } }, entry.simp),
-          React.createElement('span', { style: { fontSize: 16, color: C.accent, fontWeight: 600, marginLeft: 10 } }, entry.pinyin)
+          React.createElement('span', { style: { fontSize: 16, color: C.accent, fontWeight: 600, marginLeft: 10 } }, entry.pinyin),
+          showTrad && React.createElement('span', { style: { fontSize: 13, color: C.muted, marginLeft: 10 } }, `trad. ${entry.trad}`)
         ),
         React.createElement('button', { onClick: onClose, style: { background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: C.muted } }, '\u2715')
       ),
       React.createElement('div', { style: { fontSize: 11, color: C.accent, letterSpacing: 1, marginTop: 10, marginBottom: 4 } }, 'CHINESE'),
       (entry.defs && entry.defs.length)
         ? React.createElement('div', { style: { fontSize: 15, color: C.ink, lineHeight: 1.6 } }, entry.defs.join('; '))
-        : React.createElement('div', { style: { fontSize: 14, color: C.muted, fontStyle: 'italic' } }, 'No dictionary entry found.')
+        : React.createElement('div', { style: { fontSize: 14, color: C.muted, fontStyle: 'italic' } }, 'No dictionary entry found.'),
+      jp && React.createElement('div', { style: { marginTop: 14, paddingTop: 12, borderTop: `1px solid ${C.line}` } },
+        React.createElement('div', { style: { fontSize: 11, color: C.gold, letterSpacing: 1, marginBottom: 4 } }, 'JAPANESE'),
+        React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' } },
+          React.createElement('span', { style: { fontSize: 18, fontWeight: 700, color: C.ink } }, jp.word),
+          jp.reading && React.createElement('span', { style: { fontSize: 13, color: C.muted } }, jp.reading)
+        ),
+        React.createElement('div', { style: { fontSize: 14, color: C.ink, marginTop: 2, lineHeight: 1.5 } }, jp.meanings.join('; '))
+      )
     )
   );
 }
