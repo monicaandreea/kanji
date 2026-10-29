@@ -3969,17 +3969,23 @@ function timeAgo(ts) {
 // behaviour, reused by the Read view and by saved library items.
 // Split a line into inline runs, honoring **bold** markers. Returns an array of
 // React nodes where bold spans wrap a (still word-tappable) inner renderer.
+// Parse inline markers and emit runs via renderRun(text, key, bold, zh).
+//   **...**   -> bold
+//   zh{...}   -> inline Chinese span (segmented with the Chinese dictionary),
+//                so Chinese can appear mid-sentence inside Japanese text.
+// Markers are not nested.
 function renderInline(text, renderRun, keyBase) {
   const parts = [];
-  const re = /\*\*([^*]+)\*\*/g;
+  const re = /\*\*([^*]+)\*\*|zh\{([^}]+)\}/g;
   let last = 0, m, k = 0;
   while ((m = re.exec(text)) !== null) {
-    if (m.index > last) parts.push(renderRun(text.slice(last, m.index), `${keyBase}-${k++}`, false));
-    parts.push(renderRun(m[1], `${keyBase}-${k++}`, true));
+    if (m.index > last) parts.push(renderRun(text.slice(last, m.index), `${keyBase}-${k++}`, false, false));
+    if (m[1] !== undefined) parts.push(renderRun(m[1], `${keyBase}-${k++}`, true, false));   // **bold**
+    else parts.push(renderRun(m[2], `${keyBase}-${k++}`, false, true));                      // zh{...}
     last = re.lastIndex;
   }
-  if (last < text.length) parts.push(renderRun(text.slice(last), `${keyBase}-${k++}`, false));
-  return parts.length ? parts : [renderRun(text, `${keyBase}-0`, false)];
+  if (last < text.length) parts.push(renderRun(text.slice(last), `${keyBase}-${k++}`, false, false));
+  return parts.length ? parts : [renderRun(text, `${keyBase}-0`, false, false)];
 }
 
 function ProcessedText({ paras, onTapWord, onOpenDict, inUserDict, baseSize }) {
@@ -4030,9 +4036,10 @@ function ProcessedText({ paras, onTapWord, onOpenDict, inUserDict, baseSize }) {
           React.createElement(TappableChinese, { sentence: txt, onTapZh: setZhEntry })
         ), key);
     } else {
-      inner = renderInline(line, (txt, k, bold) =>
+      inner = renderInline(line, (txt, k, bold, zh) =>
         React.createElement(bold ? 'strong' : 'span', { key: k },
-          React.createElement(TappableSentence, { sentence: txt, onTapWord })
+          zh ? React.createElement(TappableChinese, { sentence: txt, onTapZh: setZhEntry })
+             : React.createElement(TappableSentence, { sentence: txt, onTapWord })
         ), key);
     }
     if (isBullet || isArrow) {
@@ -4098,7 +4105,7 @@ function ReadSaveDialog({ topics, initial, onCancel, onSave }) {
 
 function ReadMode({ onTapWord, raw, setRaw, processed, setProcessed,
     library, history, historyN, onSaveToLibrary, onUpdateLibrary, onDeleteLibrary,
-    onDeleteHistory, onClearHistory, onLoadFromHistory, onPushHistory, onStudyFromText, onOpenDict, inUserDict, baseSize,
+    onDeleteHistory, onClearHistory, onLoadFromHistory, onPushHistory, onStudyFromText, onOpenDict, inUserDict, baseSize, wideRead,
     view, setView, openId, setOpenId, topicFilter, setTopicFilter }) {
   const [showSave, setShowSave] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -4309,12 +4316,16 @@ function ReadMode({ onTapWord, raw, setRaw, processed, setProcessed,
           ),
       header,
       editing
-        ? React.createElement('div', { style: { display: 'flex', flexDirection: 'column', minHeight: 'calc(100vh - 220px)' } },
+        ? React.createElement('div', { style: { display: 'flex', flexDirection: 'column', minHeight: wideRead ? 'calc(100vh - 220px)' : 'auto' } },
             // Formatting toolbar: simple icon buttons like a doc editor.
             React.createElement('div', { style: { display: 'flex', gap: 6, marginBottom: 8, justifyContent: 'center', flexShrink: 0 } },
               [['B', 'Bold', () => wrapSelection('**', '**'), { fontWeight: 800 }],
                ['H', 'Heading', () => toggleLinePrefix('# '), { fontWeight: 700 }],
-               ['\u4e2d', 'Mark as Chinese', () => toggleLinePrefix('zh> '), { fontWeight: 600 }],
+               ['\u4e2d', 'Mark as Chinese (selection = inline, none = whole line)', () => {
+                  const ta = textareaRef.current;
+                  if (ta && ta.selectionStart !== ta.selectionEnd) wrapSelection('zh{', '}');
+                  else toggleLinePrefix('zh> ');
+                }, { fontWeight: 600 }],
                ['\u2022', 'Bullet list', () => toggleLinePrefix('- '), {}],
                ['\u203a', 'Arrow list', () => toggleLinePrefix('> '), {}],
                ['\u30fb', 'Middle dot', () => wrapSelection('\u30fb', ''), {}],
@@ -4329,7 +4340,7 @@ function ReadMode({ onTapWord, raw, setRaw, processed, setProcessed,
               )
             ),
             React.createElement('textarea', { ref: textareaRef, value: eText, onChange: e => setEText(e.target.value),
-              style: { width: '100%', flex: 1, minHeight: 180, padding: 14, borderRadius: 10, border: `1px solid ${C.line}`,
+              style: { width: '100%', flex: wideRead ? 1 : 'unset', minHeight: 180, padding: 14, borderRadius: 10, border: `1px solid ${C.line}`,
                 fontSize: 16, lineHeight: 1.7, resize: 'vertical', outline: 'none', boxSizing: 'border-box',
                 background: C.card, color: C.ink } })
           )
@@ -5299,7 +5310,7 @@ function App() {
         library, history, historyN,
         onSaveToLibrary:saveToLibrary, onUpdateLibrary:updateLibrary, onDeleteLibrary:deleteLibrary,
         onDeleteHistory:deleteHistory, onClearHistory:clearHistory,
-        onLoadFromHistory:loadFromHistory, onPushHistory:pushHistory, onStudyFromText:studyFromText, onOpenDict:openDictionaryFor, inUserDict, baseSize:readSize,
+        onLoadFromHistory:loadFromHistory, onPushHistory:pushHistory, onStudyFromText:studyFromText, onOpenDict:openDictionaryFor, inUserDict, baseSize:readSize, wideRead,
         view:readView, setView:setReadView, openId:readOpenId, setOpenId:setReadOpenId,
         topicFilter:readTopicFilter, setTopicFilter:setReadTopicFilter }),
       mode==='kanji' && React.createElement(KanjiMode, { items, onEditWord:setEditWordTarget, onPopupKanji:setKanjiPopup, search:dictSearch, setSearch:setDictSearch, returnTo:dictReturnRef.current, onReturn:returnFromDictionary, openKanjiChar:dictOpenKanji, onOpenKanjiDone:()=>setDictOpenKanji(null) })
