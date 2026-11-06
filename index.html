@@ -1348,6 +1348,57 @@ function segmentChinese(text) {
   return out;
 }
 
+// Trigger a client-side download of a UTF-8 text file.
+function downloadTextFile(filename, text, mime) {
+  try {
+    const blob = new Blob([text], { type: (mime || 'text/plain') + ';charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => { try { URL.revokeObjectURL(url); } catch {} }, 1500);
+  } catch (e) {}
+}
+function safeFileName(name) {
+  return ((name || 'text').trim() || 'text').replace(/[\/\\:*?"<>|]+/g, '_').slice(0, 80);
+}
+// Pull every Chinese word out of a saved text for a Pleco-style import list:
+// whole "zh>" lines and inline zh{...} spans, segmented into words, deduped,
+// one per line. Japanese text and formatting markers are ignored. Chinese that
+// lives in a heading, bullet, or arrow line is skipped (those are structure, not
+// vocabulary), so only Chinese in ordinary lines is exported.
+function extractChineseWords(text) {
+  const chunks = [];
+  const lines = (text || '').split(/\r\n|\r|\n/);
+  for (const raw of lines) {
+    // strip the prefixes in any order, noting which were present
+    let l = raw, isZh = false, isHeading = false, isBullet = false, isArrow = false, changed = true;
+    while (changed) {
+      changed = false;
+      if (/^zh>\s?/.test(l)) { isZh = true; l = l.replace(/^zh>\s?/, ''); changed = true; }
+      else if (/^#{1,3}\s+/.test(l)) { isHeading = true; l = l.replace(/^#{1,3}\s+/, ''); changed = true; }
+      else if (/^-\s+/.test(l)) { isBullet = true; l = l.replace(/^-\s+/, ''); changed = true; }
+      else if (/^>\s+/.test(l)) { isArrow = true; l = l.replace(/^>\s+/, ''); changed = true; }
+    }
+    // Skip Chinese that sits in a heading, bullet, or arrow line entirely.
+    if (isHeading || isBullet || isArrow) continue;
+    // inline zh{...} spans on an ordinary line (Chinese inside Japanese)
+    let m; const re = /zh\{([^}]+)\}/g;
+    while ((m = re.exec(l)) !== null) chunks.push(m[1]);
+    // whole-line Chinese
+    if (isZh) chunks.push(l.replace(/zh\{([^}]+)\}/g, '$1').replace(/\*\*/g, ''));
+  }
+  const words = [], seen = new Set();
+  for (const chunk of chunks) {
+    for (const seg of segmentChinese(chunk)) {
+      if (!seg.zh) continue;
+      const w = seg.text.trim();
+      if (w && !seen.has(w)) { seen.add(w); words.push(w); }
+    }
+  }
+  return words;
+}
+
 function fetchWordInfo(word) {
   if (wordInfoCache[word]) return wordInfoCache[word];
   const p = (async () => {
@@ -3988,9 +4039,11 @@ function renderInline(text, renderRun, keyBase) {
   return parts.length ? parts : [renderRun(text, `${keyBase}-0`, false, false)];
 }
 
-function ProcessedText({ paras, onTapWord, onOpenDict, inUserDict, baseSize }) {
+function ProcessedText({ paras, onTapWord, onOpenDict, inUserDict, baseSize, showContents }) {
   const BASE = baseSize || 18;  // base font size; headings scale from it
   const [zhEntry, setZhEntry] = React.useState(null); // tapped Chinese word
+  const [tocOpen, setTocOpen] = React.useState(false); // Contents collapsed by default
+  const headingRefs = React.useRef({});                // key -> heading DOM node
   // Normalize to the { lines, blanks } shape, tolerating older shapes defensively.
   const blocks = (paras || []).map(p =>
     Array.isArray(p) ? { lines: p, blanks: 1 }
@@ -3998,6 +4051,29 @@ function ProcessedText({ paras, onTapWord, onOpenDict, inUserDict, baseSize }) {
     : { lines: [p], blanks: 1 });
   const BASE_GAP = 44;   // one blank line's worth
   const EXTRA = 28;      // per blank line beyond the first
+
+  // Build the table of contents: scan every line for a heading (after stripping
+  // the zh>/bullet/arrow prefixes, in any order) and record its level and label.
+  const parseHeading = (rawLine) => {
+    let line = rawLine;
+    if (/^-{3,}$/.test(line.trim())) return null;
+    let isHeading = false, level = 0, changed = true;
+    while (changed) {
+      changed = false; let hm;
+      if (/^zh>\s?/.test(line)) { line = line.replace(/^zh>\s?/, ''); changed = true; }
+      else if (/^-\s+/.test(line)) { line = line.replace(/^-\s+/, ''); changed = true; }
+      else if (/^>\s+/.test(line)) { line = line.replace(/^>\s+/, ''); changed = true; }
+      else if ((hm = /^(#{1,3})\s+/.exec(line))) { isHeading = true; level = hm[1].length; line = line.slice(hm[0].length); changed = true; }
+    }
+    if (!isHeading) return null;
+    const label = line.replace(/zh\{([^}]+)\}/g, '$1').replace(/\*\*/g, '').trim();
+    return label ? { level, label } : null;
+  };
+  const headings = [];
+  if (showContents) blocks.forEach((blk, i) => (blk.lines || []).forEach((ln, j) => {
+    const h = parseHeading(ln);
+    if (h) headings.push({ key: `${i}-${j}`, level: h.level, label: h.label });
+  }));
 
   // Render one line, interpreting markdown (# heading, **bold**) and the Chinese
   // prefix "zh> ". Japanese text is word-tappable; Chinese text uses the Chinese
@@ -4008,20 +4084,19 @@ function ProcessedText({ paras, onTapWord, onOpenDict, inUserDict, baseSize }) {
     if (/^-{3,}$/.test(line.trim())) {
       return React.createElement('hr', { key, style: { border: 'none', borderTop: `1px solid ${C.line}`, margin: '14px 0', width: '100%' } });
     }
-    // Heading: leading # (or ##) -> larger, bolder.
-    const hMatch = /^(#{1,3})\s+(.*)$/.exec(line);
-    const isHeading = !!hMatch;
-    let headingLevel = 0;
-    if (isHeading) { headingLevel = hMatch[1].length; line = hMatch[2]; }
-    // Strip the line prefixes (Chinese, bullet, arrow) in any order, since the
-    // user may apply them in either sequence and they prepend to the front.
-    let isZh = false, isBullet = false, isArrow = false;
+    // Strip the line prefixes (Chinese, heading, bullet, arrow) in any order,
+    // since the user may click the toolbar buttons in any sequence and each one
+    // prepends to the front. Detecting the heading inside the same loop means
+    // "zh> # x" and "# zh> x" both render as a Chinese heading.
+    let isZh = false, isBullet = false, isArrow = false, isHeading = false, headingLevel = 0;
     let changed = true;
     while (changed) {
       changed = false;
+      let hm;
       if (/^zh>\s?/.test(line)) { isZh = true; line = line.replace(/^zh>\s?/, ''); changed = true; }
       else if (/^-\s+/.test(line)) { isBullet = true; line = line.replace(/^-\s+/, ''); changed = true; }
       else if (/^>\s+/.test(line)) { isArrow = true; line = line.replace(/^>\s+/, ''); changed = true; }
+      else if ((hm = /^(#{1,3})\s+/.exec(line))) { isHeading = true; headingLevel = hm[1].length; line = line.slice(hm[0].length); changed = true; }
     }
 
     const headStyle = isHeading ? {
@@ -4042,16 +4117,37 @@ function ProcessedText({ paras, onTapWord, onOpenDict, inUserDict, baseSize }) {
              : React.createElement(TappableSentence, { sentence: txt, onTapWord })
         ), key);
     }
+    // Headings get a ref (and scroll-margin) so the Contents can jump to them.
+    const headingRef = isHeading ? (el => { headingRefs.current[key] = el; }) : undefined;
+    const scrollMargin = isHeading ? { scrollMarginTop: 16 } : null;
     if (isBullet || isArrow) {
-      return React.createElement('div', { key, style: { display: 'flex', gap: 8, paddingLeft: isArrow ? 56 : 28, ...(headStyle || {}) } },
+      return React.createElement('div', { key, ref: headingRef, style: { display: 'flex', gap: 8, paddingLeft: isArrow ? 56 : 28, ...(headStyle || {}), ...(scrollMargin || {}) } },
         React.createElement('span', { style: { flexShrink: 0, color: C.muted } }, isArrow ? '›' : '•'),
         React.createElement('span', null, inner)
       );
     }
-    return React.createElement('div', { key, style: headStyle || undefined }, inner);
+    return React.createElement('div', { key, ref: headingRef, style: { ...(headStyle || {}), ...(scrollMargin || {}) } }, inner);
   };
 
   return React.createElement(React.Fragment, null,
+    (showContents && headings.length > 0) && React.createElement('div', {
+      style: { background: C.paperDark, borderRadius: 14, padding: 4, marginBottom: 12 } },
+      React.createElement('div', { onClick: () => setTocOpen(o => !o),
+        style: { display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', userSelect: 'none',
+          padding: '7px 10px', fontSize: 12, color: C.muted, fontWeight: 600 } },
+        React.createElement('span', { style: { fontSize: 11, color: C.gold } }, '☰'),
+        React.createElement('span', null, 'Contents'),
+        React.createElement('span', { style: { fontSize: 11, color: C.muted, marginLeft: 'auto',
+          display: 'inline-block', transform: tocOpen ? 'rotate(90deg)' : 'none', transition: 'transform .15s' } }, '›')
+      ),
+      tocOpen && React.createElement('div', { style: { padding: '2px 4px 6px' } },
+        headings.map((h, idx) => React.createElement('button', { key: idx, type: 'button',
+          onClick: () => { const el = headingRefs.current[h.key]; if (el && el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); },
+          style: { display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none',
+            font: 'inherit', color: h.level >= 3 ? C.muted : C.ink, cursor: 'pointer', borderRadius: 8,
+            padding: '6px 10px', paddingLeft: 10 + (h.level - 1) * 18, fontSize: h.level > 1 ? 13 : 14 } }, h.label))
+      )
+    ),
     React.createElement('div', { style: { background: C.card, border: `1px solid ${C.line}`,
       borderRadius: 10, padding: '18px 16px', display: 'flex', flexDirection: 'column' } },
       blocks.map((blk, i) =>
@@ -4113,6 +4209,7 @@ function ReadMode({ onTapWord, raw, setRaw, processed, setProcessed,
   const [eTopic, setETopic] = useState('');
   const [eText, setEText] = useState('');
   const [eNewTopic, setENewTopic] = useState('');
+  const [showExport, setShowExport] = useState(false);
   const textareaRef = React.useRef(null);
 
   // -- Formatting toolbar actions (operate on the textarea selection) --------
@@ -4154,9 +4251,58 @@ function ReadMode({ onTapWord, raw, setRaw, processed, setProcessed,
     setEText(next);
     requestAnimationFrame(() => { const y = window.scrollY; ta.focus({ preventScroll: true }); ta.setSelectionRange(lineStart, lineStart + newLines.join('\n').length); window.scrollTo(0, y); });
   };
+  // "Mark as Chinese": a partial, single-line selection becomes an inline zh{...}
+  // span; a selection that spans whole line(s) (or no selection) toggles the
+  // whole-line "zh> " prefix, so multiple rows can be marked at once.
+  const markChinese = () => {
+    const ta = textareaRef.current; if (!ta) return toggleLinePrefix('zh> ');
+    const s = ta.selectionStart, e = ta.selectionEnd, val = ta.value;
+    const sel = val.slice(s, e);
+    if (s === e || sel.includes('\n')) return toggleLinePrefix('zh> ');
+    // single-line selection: inline only if it doesn't cover the whole line's text
+    const lineStart = val.lastIndexOf('\n', s - 1) + 1;
+    let lineEnd = val.indexOf('\n', e); if (lineEnd === -1) lineEnd = val.length;
+    if (val.slice(lineStart, s).trim() === '' && val.slice(e, lineEnd).trim() === '') return toggleLinePrefix('zh> ');
+    wrapSelection('zh{', '}');
+  };
+  // "Heading" button: cycle the selected line(s) through none -> # -> ## -> ###
+  // -> none, so all three heading sizes are reachable from one button.
+  const cycleHeading = () => {
+    const ta = textareaRef.current; if (!ta) return;
+    const val = ta.value;
+    const s = ta.selectionStart, e = ta.selectionEnd;
+    const lineStart = val.lastIndexOf('\n', s - 1) + 1;
+    let lineEnd = val.indexOf('\n', e); if (lineEnd === -1) lineEnd = val.length;
+    const lines = val.slice(lineStart, lineEnd).split('\n');
+    const first = lines.find(l => l.trim() !== '') || '';
+    const cur = ((/^(#{1,3})\s+/.exec(first) || [, ''])[1] || '').length; // 0..3
+    const nextLevel = (cur + 1) % 4; // none -> 1 -> 2 -> 3 -> none
+    const newLines = lines.map(l => {
+      if (l.trim() === '') return l;
+      const stripped = l.replace(/^#{1,3}\s+/, '');
+      return nextLevel === 0 ? stripped : '#'.repeat(nextLevel) + ' ' + stripped;
+    });
+    const joined = newLines.join('\n');
+    setEText(val.slice(0, lineStart) + joined + val.slice(lineEnd));
+    requestAnimationFrame(() => { const y = window.scrollY; ta.focus({ preventScroll: true }); ta.setSelectionRange(lineStart, lineStart + joined.length); window.scrollTo(0, y); });
+  };
 
   const topics = libraryTopics(library);
   const openItem = library.find(it => it.id === openId) || null;
+
+  // Export the open saved text: full formatted text as Markdown, or just the
+  // Chinese words (one per line) as a .txt ready for Pleco import.
+  const exportAsMarkdown = () => {
+    if (!openItem) return;
+    downloadTextFile(safeFileName(openItem.title) + '.md', openItem.text || '', 'text/markdown');
+    setShowExport(false);
+  };
+  const exportChineseTxt = () => {
+    if (!openItem) return;
+    const words = extractChineseWords(openItem.text || '');
+    downloadTextFile(safeFileName(openItem.title) + '-chinese.txt', words.length ? words.join('\n') + '\n' : '', 'text/plain');
+    setShowExport(false);
+  };
 
   const process = () => { const t = raw.trim(); if (!t) return; setProcessed(toParas(t)); };
   const reset = () => { setProcessed(null); };
@@ -4309,6 +4455,9 @@ function ReadMode({ onTapWord, raw, setRaw, processed, setProcessed,
               React.createElement('button', { onClick: () => onStudyFromText && onStudyFromText(openItem.text),
                 style: { background: 'none', border: 'none', color: C.accent, fontSize: 13, fontWeight: 600,
                   cursor: 'pointer', padding: 0 } }, 'Study'),
+              React.createElement('button', { onClick: () => setShowExport(true),
+                style: { background: 'none', border: 'none', color: C.accent, fontSize: 13, fontWeight: 600,
+                  cursor: 'pointer', padding: 0 } }, 'Export'),
               React.createElement('button', { onClick: startEdit,
                 style: { background: 'none', border: 'none', color: C.muted, fontSize: 13,
                   cursor: 'pointer', padding: 0 } }, 'Edit')
@@ -4320,12 +4469,8 @@ function ReadMode({ onTapWord, raw, setRaw, processed, setProcessed,
             // Formatting toolbar: simple icon buttons like a doc editor.
             React.createElement('div', { style: { display: 'flex', gap: 6, marginBottom: 8, justifyContent: 'center', flexShrink: 0 } },
               [['B', 'Bold', () => wrapSelection('**', '**'), { fontWeight: 800 }],
-               ['H', 'Heading', () => toggleLinePrefix('# '), { fontWeight: 700 }],
-               ['\u4e2d', 'Mark as Chinese (selection = inline, none = whole line)', () => {
-                  const ta = textareaRef.current;
-                  if (ta && ta.selectionStart !== ta.selectionEnd) wrapSelection('zh{', '}');
-                  else toggleLinePrefix('zh> ');
-                }, { fontWeight: 600 }],
+               ['H', 'Heading (tap to cycle #, ##, ###)', cycleHeading, { fontWeight: 700 }],
+               ['\u4e2d', 'Mark as Chinese (part of a line = inline, whole line(s) = line mark)', markChinese, { fontWeight: 600 }],
                ['\u2022', 'Bullet list', () => toggleLinePrefix('- '), {}],
                ['\u203a', 'Arrow list', () => toggleLinePrefix('> '), {}],
                ['\u30fb', 'Middle dot', () => wrapSelection('\u30fb', ''), {}],
@@ -4344,7 +4489,29 @@ function ReadMode({ onTapWord, raw, setRaw, processed, setProcessed,
                 fontSize: 16, lineHeight: 1.7, resize: 'vertical', outline: 'none', boxSizing: 'border-box',
                 background: C.card, color: C.ink } })
           )
-        : React.createElement(ProcessedText, { paras: toParas(openItem.text), onTapWord, onOpenDict, inUserDict, baseSize })
+        : React.createElement(ProcessedText, { paras: toParas(openItem.text), onTapWord, onOpenDict, inUserDict, baseSize, showContents: true }),
+      showExport && React.createElement('div', {
+        onClick: () => setShowExport(false),
+        style: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 340,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 } },
+        React.createElement('div', { onClick: e => e.stopPropagation(),
+          style: { background: C.paper, borderRadius: 14, padding: 20, width: '100%', maxWidth: 320 } },
+          React.createElement('div', { style: { fontSize: 15, fontWeight: 700, color: C.ink, marginBottom: 4 } }, 'Export text'),
+          React.createElement('div', { style: { fontSize: 12, color: C.muted, marginBottom: 14 } }, 'Choose a format to download.'),
+          React.createElement('button', { onClick: exportAsMarkdown,
+            style: { width: '100%', textAlign: 'left', background: C.card, border: `1px solid ${C.line}`,
+              borderRadius: 8, padding: '12px 14px', cursor: 'pointer', marginBottom: 10, color: C.ink } },
+            React.createElement('div', { style: { fontWeight: 600 } }, 'Full text (.md)'),
+            React.createElement('div', { style: { fontSize: 11, color: C.muted, marginTop: 2 } }, 'The whole text with its formatting, as Markdown.')),
+          React.createElement('button', { onClick: exportChineseTxt,
+            style: { width: '100%', textAlign: 'left', background: C.card, border: `1px solid ${C.line}`,
+              borderRadius: 8, padding: '12px 14px', cursor: 'pointer', color: C.ink } },
+            React.createElement('div', { style: { fontWeight: 600 } }, 'Chinese words (.txt)'),
+            React.createElement('div', { style: { fontSize: 11, color: C.muted, marginTop: 2 } }, 'Just the Chinese words, one per line, for Pleco import.')),
+          React.createElement('button', { onClick: () => setShowExport(false),
+            style: { background: 'none', border: 'none', color: C.muted, fontSize: 13, cursor: 'pointer', marginTop: 12, width: '100%' } }, 'Cancel')
+        )
+      )
     );
   }
 
